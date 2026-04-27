@@ -85,6 +85,38 @@ describe("Sheetra pipeline", () => {
     await rm(dir, { recursive: true, force: true });
   });
 
+  it("counts rows via the CSV event-based fast drain", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "sheetra-"));
+    const file = join(dir, "drain.csv");
+
+    await write(
+      Array.from({ length: 256 }, (_, index) => ({ id: index, name: `User ${index}` })),
+      file,
+      { format: "csv" },
+    );
+
+    const stats = await read(file).drain();
+    expect(stats.rowsProcessed).toBe(256);
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  it("falls back to the iterator path when CSV pipelines are transformed", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "sheetra-"));
+    const file = join(dir, "transformed.csv");
+
+    await write(
+      Array.from({ length: 50 }, (_, index) => ({ id: index, score: index })),
+      file,
+      { format: "csv" },
+    );
+
+    const filtered = await read(file)
+      .filter((row) => Number((row as { score: string }).score) % 2 === 0)
+      .collect();
+    expect(filtered).toHaveLength(25);
+    await rm(dir, { recursive: true, force: true });
+  });
+
   it("can infer CSV primitive values when requested", async () => {
     const rows = await read(Buffer.from("name,score,active\nAda,10,true\n"), {
       format: "csv",
@@ -102,6 +134,23 @@ describe("Sheetra pipeline", () => {
     const rows = await read(file).collect();
 
     expect(rows).toEqual([{ name: "Ada", score: 10 }]);
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  it("reads only the requested sheet from a multi-sheet XLSX", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "sheetra-"));
+    const file = join(dir, "multi.xlsx");
+
+    await writeWorkbook(
+      workbook([
+        worksheet("Leads", [{ name: "Ada", score: 10 }]),
+        worksheet("Finance", [{ label: "Gross", amount: 1200 }]),
+      ]),
+      file,
+    );
+
+    const finance = await read(file, { sheet: "Finance" }).collect();
+    expect(finance).toEqual([{ label: "Gross", amount: 1200 }]);
     await rm(dir, { recursive: true, force: true });
   });
 

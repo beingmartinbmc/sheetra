@@ -3,25 +3,23 @@ import { Readable } from "node:stream";
 import { finished } from "node:stream/promises";
 import { format } from "@fast-csv/format";
 import { parse } from "@fast-csv/parse";
-import type { CellValue, ReadOptions, Row, RowLike, WriteOptions } from "../types.js";
+import { finishStats, createStats, observeMemory } from "../perf/index.js";
+import type { CellValue, ProcessStats, ReadOptions, Row, RowLike, WriteOptions } from "../types.js";
+
+const MEMORY_SAMPLE_INTERVAL_ROWS = 4096;
 
 export async function* readCsv(source: string | Buffer, options: ReadOptions = {}): AsyncIterable<Row> {
   const headers = options.headers ?? true;
   const inferTypes = options.inferTypes ?? false;
-  const stream =
-    typeof source === "string"
-      ? createReadStream(source)
-      : Readable.from(source);
+  const input = createCsvParser(source, options);
 
-  const parser = parse({
-    headers,
-    delimiter: options.delimiter ?? ",",
-    ignoreEmpty: true,
-    trim: false,
-  });
+  if (headers !== false && !inferTypes) {
+    yield* input as AsyncIterable<Row>;
+    return;
+  }
 
-  const input = stream.pipe(parser);
-  for await (const row of input) {
+  for await (const value of input) {
+    const row = value as unknown;
     if (Array.isArray(row)) {
       yield arrayRowToObject(row, inferTypes);
     } else if (inferTypes) {
@@ -30,6 +28,53 @@ export async function* readCsv(source: string | Buffer, options: ReadOptions = {
       yield row as Row;
     }
   }
+}
+
+export function drainCsvViaEvents(source: string | Buffer, options: ReadOptions = {}): Promise<ProcessStats> {
+  return new Promise((resolve, reject) => {
+    const stats = createStats();
+    const input = createCsvParser(source, options);
+    input.on("data", () => {
+      stats.rowsProcessed += 1;
+      if (stats.rowsProcessed % MEMORY_SAMPLE_INTERVAL_ROWS === 0) observeMemory(stats);
+    });
+    input.on("error", reject);
+    input.on("end", () => resolve(finishStats(stats)));
+  });
+}
+
+export function collectCsvViaEvents(source: string | Buffer, options: ReadOptions = {}): Promise<Row[]> {
+  return new Promise((resolve, reject) => {
+    const headers = options.headers ?? true;
+    const inferTypes = options.inferTypes ?? false;
+    const fastPath = headers !== false && !inferTypes;
+    const rows: Row[] = [];
+    const input = createCsvParser(source, options);
+    input.on("data", (row: unknown) => {
+      if (fastPath) {
+        rows.push(row as Row);
+        return;
+      }
+      if (Array.isArray(row)) rows.push(arrayRowToObject(row, inferTypes));
+      else if (inferTypes) rows.push(inferObjectValues(row as Record<string, string>));
+      else rows.push(row as Row);
+    });
+    input.on("error", reject);
+    input.on("end", () => resolve(rows));
+  });
+}
+
+function createCsvParser(source: string | Buffer, options: ReadOptions): NodeJS.ReadableStream {
+  const headers = options.headers ?? true;
+  const stream = typeof source === "string" ? createReadStream(source) : Readable.from(source);
+  const parser = parse({
+    headers,
+    delimiter: options.delimiter ?? ",",
+    ignoreEmpty: true,
+    trim: false,
+  });
+  stream.on("error", (error) => parser.destroy(error));
+  return stream.pipe(parser);
 }
 
 export async function writeCsv(
