@@ -39,7 +39,7 @@ import {
   writeWorkbook,
 } from "../src/index.js";
 
-describe("Sheetra pipeline", () => {
+describe("Pravaah pipeline", () => {
   it("maps, filters, and collects rows", async () => {
     const rows = await read([
       { name: "Ada", score: 10 },
@@ -75,7 +75,7 @@ describe("Sheetra pipeline", () => {
   });
 
   it("returns detailed validation issues and writes issue reports", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "sheetra-"));
+    const dir = await mkdtemp(join(tmpdir(), "pravaah-"));
     const report = join(dir, "issues.csv");
     const result = await parseDetailed(Buffer.from("email,age\nbad,old\nada@example.com,42\n"), {
       email: schema.email(),
@@ -92,7 +92,7 @@ describe("Sheetra pipeline", () => {
   });
 
   it("round-trips CSV files", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "sheetra-"));
+    const dir = await mkdtemp(join(tmpdir(), "pravaah-"));
     const file = join(dir, "rows.csv");
 
     await write([{ name: "Ada", score: 10 }], file, { format: "csv" });
@@ -105,7 +105,7 @@ describe("Sheetra pipeline", () => {
   });
 
   it("counts rows via the CSV event-based fast drain", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "sheetra-"));
+    const dir = await mkdtemp(join(tmpdir(), "pravaah-"));
     const file = join(dir, "drain.csv");
 
     await write(
@@ -143,7 +143,7 @@ describe("Sheetra pipeline", () => {
   });
 
   it("falls back to the iterator path when CSV pipelines are transformed", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "sheetra-"));
+    const dir = await mkdtemp(join(tmpdir(), "pravaah-"));
     const file = join(dir, "transformed.csv");
 
     await write(
@@ -169,7 +169,7 @@ describe("Sheetra pipeline", () => {
   });
 
   it("round-trips basic XLSX files", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "sheetra-"));
+    const dir = await mkdtemp(join(tmpdir(), "pravaah-"));
     const file = join(dir, "rows.xlsx");
 
     await write([{ name: "Ada", score: 10 }], file, { format: "xlsx" });
@@ -180,7 +180,7 @@ describe("Sheetra pipeline", () => {
   });
 
   it("reads only the requested sheet from a multi-sheet XLSX", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "sheetra-"));
+    const dir = await mkdtemp(join(tmpdir(), "pravaah-"));
     const file = join(dir, "multi.xlsx");
 
     await writeWorkbook(
@@ -197,7 +197,7 @@ describe("Sheetra pipeline", () => {
   });
 
   it("reads shared strings and sparse XLSX cells with the worksheet scanner", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "sheetra-"));
+    const dir = await mkdtemp(join(tmpdir(), "pravaah-"));
     const file = join(dir, "shared.xlsx");
     const files = {
       "xl/workbook.xml": strToU8(
@@ -219,7 +219,7 @@ describe("Sheetra pipeline", () => {
   });
 
   it("round-trips multi-sheet workbooks with formulas and sheet metadata", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "sheetra-"));
+    const dir = await mkdtemp(join(tmpdir(), "pravaah-"));
     const file = join(dir, "book.xlsx");
     const summary = worksheet("Summary", [{ label: "Total", total: formula("SUM(B2:B3)", 30) }]);
     summary.merges.push("A1:B1");
@@ -250,7 +250,7 @@ describe("Sheetra pipeline", () => {
   });
 });
 
-describe("Sheetra differentiators", () => {
+describe("Pravaah differentiators", () => {
   it("evaluates common formulas", () => {
     expect(evaluateFormula("=SUM(a,b,5)", { a: 2, b: 3 })).toBe(10);
     expect(evaluateFormula("=IF(active,\"yes\",\"no\")", { active: true })).toBe("yes");
@@ -273,7 +273,7 @@ describe("Sheetra differentiators", () => {
       unchanged: 0,
     });
 
-    const dir = await mkdtemp(join(tmpdir(), "sheetra-"));
+    const dir = await mkdtemp(join(tmpdir(), "pravaah-"));
     const report = join(dir, "diff.csv");
     await writeDiffReport(result, report);
     await expect(readFile(report, "utf8")).resolves.toContain("changed");
@@ -355,12 +355,12 @@ describe("Schema validation and cleaning", () => {
     expect(result.issues.map((issue) => issue.code)).toContain("invalid_value");
     expect(result.issues.map((issue) => issue.code)).toContain("missing_column");
     expect(() => validateRows([{ id: "bad" }], { id: schema.number() }, { mode: "fail-fast" })).toThrow(
-      "Sheetra validation failed",
+      "Pravaah validation failed",
     );
   });
 
   it("writes issue reports with escaped object and date values", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "sheetra-"));
+    const dir = await mkdtemp(join(tmpdir(), "pravaah-"));
     const file = join(dir, "issues.csv");
     const date = new Date("2026-01-01T00:00:00.000Z");
 
@@ -423,7 +423,7 @@ describe("Query, diff, formula, plugins, and perf utilities", () => {
   });
 
   it("covers diff report branches and date equality", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "sheetra-"));
+    const dir = await mkdtemp(join(tmpdir(), "pravaah-"));
     const file = join(dir, "diff.csv");
     const sameDate = new Date("2026-01-01T00:00:00.000Z");
     const result = diff(
@@ -511,7 +511,7 @@ describe("Query, diff, formula, plugins, and perf utilities", () => {
 
 describe("Additional pipeline, CSV, and XLSX coverage", () => {
   it("reads JSON, processes validation errors, writes JSON, and rejects unsupported formats", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "sheetra-"));
+    const dir = await mkdtemp(join(tmpdir(), "pravaah-"));
     const input = join(dir, "rows.json");
     const output = join(dir, "out.json");
     await writeFile(input, JSON.stringify([{ id: 1 }, { id: 2 }]));
@@ -538,7 +538,7 @@ describe("Additional pipeline, CSV, and XLSX coverage", () => {
   });
 
   it("covers parse helpers, pipeline write, and array-row validation diagnostics", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "sheetra-"));
+    const dir = await mkdtemp(join(tmpdir(), "pravaah-"));
     const file = join(dir, "pipeline.csv");
 
     await expect(parse(Buffer.from("id,name\n1,Ada\n"), { id: schema.number(), name: schema.string() }, { format: "csv" })).resolves.toEqual([
@@ -549,7 +549,7 @@ describe("Additional pipeline, CSV, and XLSX coverage", () => {
     expect(detailed.issues[0]).toMatchObject({ code: "array_row", rowNumber: 1 });
     await expect(
       parseDetailed(Buffer.from("[[1,2]]"), { id: schema.number() }, { format: "json", validation: "fail-fast" }),
-    ).rejects.toThrow("Sheetra validation failed");
+    ).rejects.toThrow("Pravaah validation failed");
 
     const stats = await read([{ id: 1 }, { id: 2 }]).write(file, { format: "csv" });
     expect(stats.rowsWritten).toBe(2);
@@ -567,7 +567,7 @@ describe("Additional pipeline, CSV, and XLSX coverage", () => {
     }) as typeof process.emitWarning;
 
     try {
-      await expect(read([[1, 2]]).schema({ id: schema.number() }).collect()).rejects.toThrow("Sheetra validation failed");
+      await expect(read([[1, 2]]).schema({ id: schema.number() }).collect()).rejects.toThrow("Pravaah validation failed");
       await read([{ id: "bad" }]).schema({ id: schema.number() }).drain();
       expect(warnings).toContain("id must be number");
     } finally {
@@ -640,7 +640,7 @@ describe("Additional pipeline, CSV, and XLSX coverage", () => {
   });
 
   it("covers XLSX headerless reads, styles, dates, booleans, formulas, and empty workbooks", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "sheetra-"));
+    const dir = await mkdtemp(join(tmpdir(), "pravaah-"));
     const empty = join(dir, "empty.xlsx");
     const rich = join(dir, "rich.xlsx");
 
@@ -668,7 +668,7 @@ describe("Additional pipeline, CSV, and XLSX coverage", () => {
   });
 
   it("covers sparse/self-closing XLSX XML and array-row XLSX writes", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "sheetra-"));
+    const dir = await mkdtemp(join(tmpdir(), "pravaah-"));
     const sparse = join(dir, "sparse.xlsx");
     const arrays = join(dir, "arrays.xlsx");
     const files = {
@@ -700,7 +700,7 @@ describe("Additional pipeline, CSV, and XLSX coverage", () => {
   });
 
   it("covers XLSX worksheet discovery fallback and missing worksheet errors", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "sheetra-"));
+    const dir = await mkdtemp(join(tmpdir(), "pravaah-"));
     const fallback = join(dir, "fallback.xlsx");
     const invalid = join(dir, "invalid.xlsx");
 
@@ -849,7 +849,7 @@ describe("Optimization-specific tests", () => {
   });
 
   it("fused pipeline drain skips fast path when operations are pending", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "sheetra-"));
+    const dir = await mkdtemp(join(tmpdir(), "pravaah-"));
     const file = join(dir, "fuse.csv");
     await write(Array.from({ length: 100 }, (_, i) => ({ id: i })), file, { format: "csv" });
 
@@ -859,7 +859,7 @@ describe("Optimization-specific tests", () => {
   });
 
   it("fused pipeline collect skips fast path when operations are pending", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "sheetra-"));
+    const dir = await mkdtemp(join(tmpdir(), "pravaah-"));
     const file = join(dir, "fuse2.csv");
     await write([{ x: "1" }, { x: "2" }], file, { format: "csv" });
 
@@ -869,7 +869,7 @@ describe("Optimization-specific tests", () => {
   });
 
   it("selective XLSX unzip only decompresses needed entries for readXlsx", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "sheetra-"));
+    const dir = await mkdtemp(join(tmpdir(), "pravaah-"));
     const file = join(dir, "selective.xlsx");
 
     await writeWorkbook(
@@ -889,7 +889,7 @@ describe("Optimization-specific tests", () => {
   });
 
   it("lazy shared strings resolves strings on demand and caches them", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "sheetra-"));
+    const dir = await mkdtemp(join(tmpdir(), "pravaah-"));
     const file = join(dir, "lazy.xlsx");
 
     const files = {
@@ -914,7 +914,7 @@ describe("Optimization-specific tests", () => {
   });
 
   it("lazy shared strings handles out-of-range index", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "sheetra-"));
+    const dir = await mkdtemp(join(tmpdir(), "pravaah-"));
     const file = join(dir, "oob.xlsx");
 
     const files = {
@@ -937,7 +937,7 @@ describe("Optimization-specific tests", () => {
   });
 
   it("XLSX dimension tag enables pre-allocated row arrays", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "sheetra-"));
+    const dir = await mkdtemp(join(tmpdir(), "pravaah-"));
     const file = join(dir, "dim.xlsx");
 
     await writeWorkbook(
@@ -951,7 +951,7 @@ describe("Optimization-specific tests", () => {
   });
 
   it("XLSX workbook parser handles sheetData-like tag names without false matching", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "sheetra-"));
+    const dir = await mkdtemp(join(tmpdir(), "pravaah-"));
     const file = join(dir, "sheetdata.xlsx");
 
     const files = {
@@ -973,7 +973,7 @@ describe("Optimization-specific tests", () => {
   });
 
   it("CSV write respects backpressure without data loss", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "sheetra-"));
+    const dir = await mkdtemp(join(tmpdir(), "pravaah-"));
     const file = join(dir, "backpressure.csv");
 
     const bigRows = Array.from({ length: 1000 }, (_, i) => ({ id: i, data: "x".repeat(100) }));
@@ -998,7 +998,7 @@ describe("Optimization-specific tests", () => {
   });
 
   it("readWorkbook with selective unzip reads all sheets via full unzip", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "sheetra-"));
+    const dir = await mkdtemp(join(tmpdir(), "pravaah-"));
     const file = join(dir, "multi.xlsx");
 
     await writeWorkbook(
@@ -1036,7 +1036,7 @@ describe("Optimization-specific tests", () => {
   });
 
   it("XLSX without shared strings works correctly", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "sheetra-"));
+    const dir = await mkdtemp(join(tmpdir(), "pravaah-"));
     const file = join(dir, "noss.xlsx");
     const files = {
       "xl/workbook.xml": strToU8(
@@ -1125,7 +1125,7 @@ describe("Optimization-specific tests", () => {
   });
 
   it("XLSX lazy shared strings length property works", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "sheetra-"));
+    const dir = await mkdtemp(join(tmpdir(), "pravaah-"));
     const file = join(dir, "len.xlsx");
     const files = {
       "xl/workbook.xml": strToU8(
@@ -1183,7 +1183,7 @@ describe("Optimization-specific tests", () => {
   });
 
   it("XLSX dimension tag produces correct column count for pre-allocation", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "sheetra-"));
+    const dir = await mkdtemp(join(tmpdir(), "pravaah-"));
     const file = join(dir, "widedim.xlsx");
     await writeWorkbook(workbook([worksheet("Sheet1", [{ a: 1, b: 2, c: 3, d: 4, e: 5 }])]), file);
     const rows = await read(file).collect();
@@ -1198,7 +1198,7 @@ describe("Optimization-specific tests", () => {
   });
 
   it("XLSX fallback path handles worksheet not found in non-meta archive", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "sheetra-"));
+    const dir = await mkdtemp(join(tmpdir(), "pravaah-"));
     const file = join(dir, "nofb.xlsx");
     await writeFile(
       file,
@@ -1213,7 +1213,7 @@ describe("Optimization-specific tests", () => {
   });
 
   it("XLSX with dimension tag pre-allocates row array for correct column count", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "sheetra-"));
+    const dir = await mkdtemp(join(tmpdir(), "pravaah-"));
     const file = join(dir, "dim.xlsx");
     const files = {
       "xl/workbook.xml": strToU8(

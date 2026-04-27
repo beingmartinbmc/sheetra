@@ -1,7 +1,7 @@
 import { performance } from "node:perf_hooks";
 import { read, write, formatBytes } from "../src/index.js";
 
-const rowCount = Number(process.env.SHEETRA_BENCH_ROWS ?? 100_000);
+const rowCount = Number(process.env.PRAVAAH_BENCH_ROWS ?? 100_000);
 const rows = Array.from({ length: rowCount }, (_, index) => ({
   id: index + 1,
   name: `User ${index}`,
@@ -9,8 +9,8 @@ const rows = Array.from({ length: rowCount }, (_, index) => ({
 }));
 
 const results = [
-  await measure("sheetra:csv:pipeline", async () => {
-    const stats = await write(read(rows).map((row) => ({ ...row, total: Number(row.amount) + 1 })), "/tmp/sheetra-compare.csv", {
+  await measure("pravaah:csv:pipeline", async () => {
+    const stats = await write(read(rows).map((row) => ({ ...row, total: Number(row.amount) + 1 })), "/tmp/pravaah-compare.csv", {
       format: "csv",
     });
     return { peakRssBytes: stats.peakRssBytes };
@@ -18,14 +18,14 @@ const results = [
   await optionalMeasure("xlsx", "sheetjs:xlsx:json_to_sheet", async (xlsx) => {
     const workbook = xlsx.utils.book_new();
     xlsx.utils.book_append_sheet(workbook, xlsx.utils.json_to_sheet(rows), "Sheet1");
-    xlsx.writeFile(workbook, "/tmp/sheetra-sheetjs.xlsx");
+    xlsx.writeFile(workbook, "/tmp/pravaah-sheetjs.xlsx");
     return {};
   }),
   await optionalMeasure("exceljs", "exceljs:workbook:csv", async (ExcelJS) => {
     const workbook = new ExcelJS.Workbook();
     const sheet = workbook.addWorksheet("Sheet1");
     sheet.addRows(rows.map((row) => Object.values(row)));
-    await workbook.csv.writeFile("/tmp/sheetra-exceljs.csv");
+    await workbook.csv.writeFile("/tmp/pravaah-exceljs.csv");
     return {};
   }),
 ].filter(Boolean);

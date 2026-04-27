@@ -66,7 +66,7 @@ export async function ensureXlsxFixture(path: string, shape: DatasetShape): Prom
 }
 
 export function scaleFromEnv(defaultScales: number[]): number[] {
-  return (process.env.SHEETRA_BENCH_SCALES ?? defaultScales.join(","))
+  return (process.env.PRAVAAH_BENCH_SCALES ?? defaultScales.join(","))
     .split(",")
     .map((value) => Number(value.trim()))
     .filter((value) => Number.isFinite(value) && value > 0);

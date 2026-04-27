@@ -1,4 +1,4 @@
-Golden XLSX and CSV fixtures live here as Sheetra expands compatibility coverage.
+Golden XLSX and CSV fixtures live here as Pravaah expands compatibility coverage.
 
 Fixture rules:
 - Keep files small enough for source control unless they test large-file behavior.
