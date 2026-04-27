@@ -60,7 +60,7 @@ npm run benchmark:files
 
 ## Benchmarks
 
-Benchmarks are intentionally checked in as scripts, not marketing claims. Run them on your own machine with representative files before choosing Sheetra for a workload.
+Benchmarks are intentionally checked in as scripts, not marketing claims. Run them on your own machine with representative files before choosing Sheetra for a workload. The strongest suite is `npm run benchmark:strong`, which is designed to answer whether Sheetra survives messy, large, production-style files.
 
 Local environment for the numbers below:
 
@@ -103,7 +103,20 @@ SHEETRA_BENCH_ROWS=100000 npm run benchmark:compare
 SHEETRA_BENCH_FILE=MOCK_DATA.csv npm run benchmark:files
 SHEETRA_BENCH_LIMIT=100000 npm run benchmark:files
 SHEETRA_BENCH_INCLUDE_MEMORY=1 npm run benchmark:files
+SHEETRA_BENCH_PROFILE=full npm run benchmark:strong
+SHEETRA_BENCH_SCALES=100000,500000,1000000,2000000 npm run benchmark:strong
 ```
+
+The strong suite covers:
+
+- Scale runs from 100k through 2M+ rows.
+- Streaming vs in-memory modes for Sheetra, ExcelJS, SheetJS, and fast-csv.
+- XLSX read paths, multi-sheet workbooks, and formula-preserving files.
+- Tall data, wide data, light transforms, heavy transforms, and full read-validate-transform-write pipelines.
+- Fault tolerance with messy rows, invalid types, missing values, and issue collection.
+- Worker-thread scaling, cold/warm runs, local file-size fixtures, GC time, and memory samples over time.
+
+The suite writes detailed JSON and Markdown artifacts to `benchmark/results/`, including sampled memory timelines. Those generated artifacts are ignored by git so local large-run evidence stays local unless explicitly published.
 
 ## License
 
