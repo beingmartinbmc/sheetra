@@ -1,4 +1,4 @@
-import { readCsv, writeCsv } from "../csv/index.js";
+import { collectCsvViaEvents, drainCsvViaEvents, readCsv, writeCsv } from "../csv/index.js";
 import { finishStats, createStats, observeMemory } from "../perf/index.js";
 import { cleanRow, type InferSchema, type SchemaDefinition, SheetraValidationError, validateRow } from "../schema/index.js";
 import type { ProcessResult, ProcessStats, ReadOptions, Row, RowLike, SheetraIssue, WriteOptions } from "../types.js";
@@ -6,8 +6,16 @@ import { readXlsx, writeXlsx } from "../xlsx/index.js";
 
 const MEMORY_SAMPLE_INTERVAL_ROWS = 4096;
 
+export interface PipelineFastPaths<T> {
+  drain?: () => Promise<ProcessStats>;
+  collect?: () => Promise<T[]>;
+}
+
 export class SheetraPipeline<T = Row> implements AsyncIterable<T> {
-  constructor(private readonly source: () => AsyncIterable<T>) {}
+  constructor(
+    private readonly source: () => AsyncIterable<T>,
+    private readonly fastPaths: PipelineFastPaths<T> = {},
+  ) {}
 
   [Symbol.asyncIterator](): AsyncIterator<T> {
     return this.source()[Symbol.asyncIterator]();
@@ -81,6 +89,7 @@ export class SheetraPipeline<T = Row> implements AsyncIterable<T> {
   }
 
   async collect(): Promise<T[]> {
+    if (this.fastPaths.collect !== undefined) return this.fastPaths.collect();
     const rows: T[] = [];
     for await (const row of this) rows.push(row);
     return rows;
@@ -110,6 +119,7 @@ export class SheetraPipeline<T = Row> implements AsyncIterable<T> {
   }
 
   async drain(): Promise<ProcessStats> {
+    if (this.fastPaths.drain !== undefined) return this.fastPaths.drain();
     const stats = createStats();
 
     try {
@@ -145,7 +155,12 @@ export function read(
   }
 
   const format = options.format ?? inferFormat(typeof source === "string" ? source : undefined);
-  if (format === "csv") return new SheetraPipeline(() => readCsv(source, options));
+  if (format === "csv") {
+    return new SheetraPipeline(() => readCsv(source, options), {
+      drain: () => drainCsvViaEvents(source, options),
+      collect: () => collectCsvViaEvents(source, options) as Promise<RowLike[]>,
+    });
+  }
   if (format === "xlsx") return new SheetraPipeline(() => readXlsx(source, options));
   if (format === "json") {
     return new SheetraPipeline(async function* () {

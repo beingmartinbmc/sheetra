@@ -12,14 +12,21 @@ const parser = new XMLParser({
 });
 
 export async function* readXlsx(source: string | Buffer, options: ReadOptions = {}): AsyncIterable<Row> {
-  const book = await readWorkbook(source, options);
-  const selected =
-    typeof options.sheet === "string"
-      ? book.sheets.find((sheet) => sheet.name === options.sheet)
-      : book.sheets[typeof options.sheet === "number" ? options.sheet : 0];
+  const bytes = typeof source === "string" ? await readFile(source) : source;
+  const files = unzipSync(new Uint8Array(bytes));
+  const sharedStrings = readSharedStrings(files);
+  const sheetEntries = workbookSheets(files);
 
-  if (selected === undefined) throw new Error(`Worksheet not found: ${String(options.sheet ?? 0)}`);
-  yield* selected.rows;
+  const target =
+    typeof options.sheet === "string"
+      ? sheetEntries.find((entry) => entry.name === options.sheet)
+      : sheetEntries[typeof options.sheet === "number" ? options.sheet : 0];
+
+  if (target === undefined) throw new Error(`Worksheet not found: ${String(options.sheet ?? 0)}`);
+  const sheetXml = files[target.path];
+  if (sheetXml === undefined) throw new Error(`Worksheet XML not found: ${target.path}`);
+
+  yield* iterateWorksheetRows(strFromU8(sheetXml), sharedStrings, options);
 }
 
 export async function writeXlsx(
@@ -207,25 +214,51 @@ function normalizeWorksheetTarget(target: string): string {
 }
 
 function readWorksheetRows(xml: string, sharedStrings: string[], options: ReadOptions): Row[] {
-  const doc = parser.parse(xml) as WorksheetDoc;
-  const rows = arrayify(doc.worksheet.sheetData?.row);
-  const headerRow = rows[0];
-  const headers =
-    Array.isArray(options.headers) && options.headers.length > 0
-      ? options.headers
-      : headerRow !== undefined
-        ? readCells(headerRow, sharedStrings, options).map((cell, index) => String(cell ?? `_${index + 1}`))
-        : [];
-
-  const dataRows = options.headers === false ? rows : rows.slice(1);
-  return dataRows.map((row) => {
-    const values = readCells(row, sharedStrings, options);
-    return Object.fromEntries(headers.map((header, index) => [header, values[index] ?? null]));
-  });
+  return Array.from(iterateWorksheetRows(xml, sharedStrings, options));
 }
 
-function readCells(row: WorksheetRow, sharedStrings: string[], options: ReadOptions): CellValue[] {
-  return arrayify(row.c).map((cell) => decodeCell(cell, sharedStrings, options));
+function* iterateWorksheetRows(xml: string, sharedStrings: string[], options: ReadOptions): Iterable<Row> {
+  const doc = parser.parse(xml) as WorksheetDoc;
+  const rows = arrayify(doc.worksheet.sheetData?.row);
+  if (rows.length === 0) return;
+
+  const useArrayHeaders = Array.isArray(options.headers) && options.headers.length > 0;
+  const headerless = options.headers === false;
+  const headers = useArrayHeaders
+    ? (options.headers as string[])
+    : headerless
+      ? []
+      : readHeaderRow(rows[0]!, sharedStrings, options);
+
+  const startIndex = headerless || useArrayHeaders ? 0 : 1;
+  for (let r = startIndex; r < rows.length; r += 1) {
+    const row = rows[r]!;
+    const cells = arrayify(row.c);
+    const headerCount = headers.length;
+    const obj: Row = {};
+    if (headerCount > 0) {
+      for (let i = 0; i < headerCount; i += 1) {
+        const header = headers[i]!;
+        const cell = cells[i];
+        obj[header] = cell === undefined ? null : decodeCell(cell, sharedStrings, options);
+      }
+    } else {
+      for (let i = 0; i < cells.length; i += 1) {
+        obj[`_${i + 1}`] = decodeCell(cells[i]!, sharedStrings, options);
+      }
+    }
+    yield obj;
+  }
+}
+
+function readHeaderRow(row: WorksheetRow, sharedStrings: string[], options: ReadOptions): string[] {
+  const cells = arrayify(row.c);
+  const headers: string[] = new Array(cells.length);
+  for (let i = 0; i < cells.length; i += 1) {
+    const value = decodeCell(cells[i]!, sharedStrings, options);
+    headers[i] = String(value ?? `_${i + 1}`);
+  }
+  return headers;
 }
 
 function decodeCell(cell: WorksheetCell, sharedStrings: string[], options: ReadOptions): CellValue {
