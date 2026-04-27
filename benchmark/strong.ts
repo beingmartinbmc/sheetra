@@ -65,7 +65,7 @@ async function scaleCases(): Promise<BenchmarkCase[]> {
     cases.push({
       suite: "scale",
       name: `${rows.toLocaleString()} rows x 10 columns`,
-      mode: "sheetra streaming",
+      mode: "sheetra raw streaming",
       format: "csv",
       rows,
       columns: 10,
@@ -94,12 +94,58 @@ async function modeCases(): Promise<BenchmarkCase[]> {
     {
       suite: "streaming-vs-memory",
       name: "CSV read",
-      mode: "sheetra streaming",
+      mode: "sheetra raw streaming",
       format: "csv",
       rows,
       columns: 10,
       fileSizeBytes: size,
       run: () => drainSheetraCsv(path),
+    },
+    {
+      suite: "streaming-vs-memory",
+      name: "CSV read",
+      mode: "sheetra inferTypes",
+      format: "csv",
+      rows,
+      columns: 10,
+      fileSizeBytes: size,
+      run: () => drainSheetraCsv(path, undefined, { inferTypes: true }),
+    },
+    {
+      suite: "streaming-vs-memory",
+      name: "CSV read",
+      mode: "sheetra schema+cleaning",
+      format: "csv",
+      rows,
+      columns: 10,
+      fileSizeBytes: size,
+      run: async () => {
+        const result = await parseDetailed(
+          path,
+          {
+            id: schema.number(),
+            email: schema.email(),
+            amount: schema.number(),
+            quantity: schema.number(),
+          },
+          {
+            format: "csv",
+            validation: "collect",
+            cleaning: { trim: true, normalizeWhitespace: true },
+          },
+        );
+        return result.rows.length + result.issues.length;
+      },
+    },
+    {
+      suite: "streaming-vs-memory",
+      name: "CSV read",
+      mode: "fast-csv streaming",
+      format: "csv",
+      rows,
+      columns: 10,
+      fileSizeBytes: size,
+      run: () => drainFastCsv(path),
     },
     {
       suite: "streaming-vs-memory",
@@ -193,7 +239,7 @@ async function shapeCases(): Promise<BenchmarkCase[]> {
     {
       suite: "shape",
       name: "tall data",
-      mode: "sheetra streaming",
+      mode: "sheetra raw streaming",
       format: "csv",
       rows: tallRows,
       columns: 10,
@@ -203,7 +249,7 @@ async function shapeCases(): Promise<BenchmarkCase[]> {
     {
       suite: "shape",
       name: "wide data",
-      mode: "sheetra streaming",
+      mode: "sheetra raw streaming",
       format: "csv",
       rows: wideRows,
       columns: 200,
@@ -220,7 +266,7 @@ async function transformCases(): Promise<BenchmarkCase[]> {
   return (["none", "light", "heavy"] as const).map((level) => ({
     suite: "transform",
     name: `${level} transform`,
-    mode: "sheetra streaming",
+    mode: "sheetra raw streaming",
     format: "csv",
     rows,
     columns: 20,
@@ -287,7 +333,7 @@ async function coldWarmCases(): Promise<BenchmarkCase[]> {
     {
       suite: "cold-warm",
       name: "first run",
-      mode: "sheetra streaming",
+      mode: "sheetra raw streaming",
       format: "csv",
       rows,
       columns: 10,
@@ -297,7 +343,7 @@ async function coldWarmCases(): Promise<BenchmarkCase[]> {
     {
       suite: "cold-warm",
       name: "second run",
-      mode: "sheetra streaming",
+      mode: "sheetra raw streaming",
       format: "csv",
       rows,
       columns: 10,
