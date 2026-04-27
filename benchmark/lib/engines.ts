@@ -2,10 +2,14 @@ import { createReadStream } from "node:fs";
 import { parse as parseCsv } from "@fast-csv/parse";
 import ExcelJS from "exceljs";
 import { read, write } from "../../src/index.js";
-import type { Row } from "../../src/index.js";
+import type { ReadOptions, Row } from "../../src/index.js";
 
-export async function drainSheetraCsv(path: string, transform?: (row: Row) => Row): Promise<number> {
-  const pipeline = transform === undefined ? read(path) : read(path).map((row) => transform(row as Row));
+export async function drainSheetraCsv(
+  path: string,
+  transform?: (row: Row) => Row,
+  options: ReadOptions = {},
+): Promise<number> {
+  const pipeline = transform === undefined ? read(path, options) : read(path, options).map((row) => transform(row as Row));
   return (await pipeline.drain()).rowsProcessed;
 }
 
