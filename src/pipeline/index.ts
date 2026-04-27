@@ -4,6 +4,8 @@ import { cleanRow, type InferSchema, type SchemaDefinition, SheetraValidationErr
 import type { ProcessResult, ProcessStats, ReadOptions, Row, RowLike, SheetraIssue, WriteOptions } from "../types.js";
 import { readXlsx, writeXlsx } from "../xlsx/index.js";
 
+const MEMORY_SAMPLE_INTERVAL_ROWS = 4096;
+
 export class SheetraPipeline<T = Row> implements AsyncIterable<T> {
   constructor(private readonly source: () => AsyncIterable<T>) {}
 
@@ -93,7 +95,7 @@ export class SheetraPipeline<T = Row> implements AsyncIterable<T> {
       for await (const row of this) {
         rows.push(row);
         stats.rowsProcessed += 1;
-        observeMemory(stats);
+        observeMemoryPeriodically(stats);
       }
     } catch (error) {
       if (error instanceof SheetraValidationError) {
@@ -114,7 +116,7 @@ export class SheetraPipeline<T = Row> implements AsyncIterable<T> {
       for await (const row of this) {
         void row;
         stats.rowsProcessed += 1;
-        observeMemory(stats);
+        observeMemoryPeriodically(stats);
       }
     } catch (error) {
       if (error instanceof SheetraValidationError) {
@@ -214,7 +216,7 @@ export async function parseDetailed<S extends SchemaDefinition>(
     const cleaned = cleanRow(row, options.cleaning);
     const result = validateRow(cleaned, definition, { rowNumber });
     stats.rowsProcessed += 1;
-    observeMemory(stats);
+    observeMemoryPeriodically(stats);
 
     if (result.value !== undefined) {
       rows.push(result.value);
@@ -241,9 +243,13 @@ async function* countRows<T extends RowLike>(rows: AsyncIterable<T> | Iterable<T
   for await (const row of rows) {
     stats.rowsProcessed += 1;
     stats.rowsWritten += 1;
-    observeMemory(stats);
+    observeMemoryPeriodically(stats);
     yield row;
   }
+}
+
+function observeMemoryPeriodically(stats: ProcessStats): void {
+  if (stats.rowsProcessed % MEMORY_SAMPLE_INTERVAL_ROWS === 0) observeMemory(stats);
 }
 
 function inferFormat(path?: string): "xlsx" | "csv" | "json" {

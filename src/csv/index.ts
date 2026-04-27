@@ -7,6 +7,7 @@ import type { CellValue, ReadOptions, Row, RowLike, WriteOptions } from "../type
 
 export async function* readCsv(source: string | Buffer, options: ReadOptions = {}): AsyncIterable<Row> {
   const headers = options.headers ?? true;
+  const inferTypes = options.inferTypes ?? false;
   const stream =
     typeof source === "string"
       ? createReadStream(source)
@@ -22,11 +23,11 @@ export async function* readCsv(source: string | Buffer, options: ReadOptions = {
   const input = stream.pipe(parser);
   for await (const row of input) {
     if (Array.isArray(row)) {
-      yield Object.fromEntries(row.map((value, index) => [`_${index + 1}`, normalizeCsvValue(value)]));
+      yield arrayRowToObject(row, inferTypes);
+    } else if (inferTypes) {
+      yield inferObjectValues(row as Record<string, string>);
     } else {
-      yield Object.fromEntries(
-        Object.entries(row as Record<string, string>).map(([key, value]) => [key, normalizeCsvValue(value)]),
-      );
+      yield row as Row;
     }
   }
 }
@@ -61,5 +62,20 @@ function normalizeCsvValue(value: string): CellValue {
   if (Number.isFinite(numeric) && value.trim() !== "") return numeric;
   if (/^(true|false)$/i.test(value)) return value.toLowerCase() === "true";
   return value;
+}
+
+function inferObjectValues(row: Record<string, string>): Row {
+  const output: Row = {};
+  for (const key in row) output[key] = normalizeCsvValue(row[key] ?? "");
+  return output;
+}
+
+function arrayRowToObject(row: string[], inferTypes: boolean): Row {
+  const output: Row = {};
+  for (let index = 0; index < row.length; index += 1) {
+    const value = row[index] ?? "";
+    output[`_${index + 1}`] = inferTypes ? normalizeCsvValue(value) : value;
+  }
+  return output;
 }
 
