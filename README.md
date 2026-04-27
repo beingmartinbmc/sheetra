@@ -133,15 +133,23 @@ This suite answers a practical question:
 
 Each engine runs in its own fresh Node process via `npm run benchmark:isolated`. RSS is sampled every 25ms; numbers below are best-of-three on the same machine.
 
+#### Count-Only Drain
+
 | Engine | Time | Peak RSS |
 | --- | ---: | ---: |
-| `sheetra:csv:raw-drain` | 801ms | 116MB |
-| `fast-csv:stream` | 8.42s | 154MB |
-| `sheetjs:xlsx:readFile` | 6.98s | 3.41GB |
+| `sheetra:csv:raw-drain` | 761ms | 116MB |
 
-Sheetra now wins this raw drain workload by scanning CSV records directly instead of parsing every cell and allocating every row object. It still keeps the data-pipeline ergonomics (`map`, `filter`, `clean`, `schema`, `write`) for workloads that need actual row values.
+This is intentionally **not** a parser benchmark. `read(csv).drain()` only needs a row count, so Sheetra scans record boundaries outside quoted fields and does not parse cells or allocate row objects. This is useful for import probes, preflight checks, progress estimates, and validation gates where you only need to know whether the file is structurally readable and how many rows it contains.
 
-SheetJS is much slower on this CSV count workload and materializes the entire 244MB file in memory (~3.4GB peak RSS), which is unsafe for backend ingestion at this size.
+#### Row Parsing
+
+| Engine | Time | Peak RSS |
+| --- | ---: | ---: |
+| `sheetra:csv:row-parse` | 8.46s | 135MB |
+| `fast-csv:stream` | 8.44s | 140MB |
+| `sheetjs:xlsx:readFile` | 7.38s | 3.41GB |
+
+For workloads that actually need row objects (`map`, `filter`, `schema`, `write`, or `collect`), Sheetra uses the parser-backed pipeline. That comparison is effectively at parity with fast-csv, not a millisecond-scale win. SheetJS is faster on raw CSV decode here, but it materializes the entire 244MB file in memory, which is unsafe for backend ingestion at this size.
 
 ### CSV Streaming Fast Path
 
@@ -163,10 +171,10 @@ XLSX reads avoid full worksheet DOM parsing on the hot path. Sheetra scans works
 
 ### Interpretation
 
-- CSV: production-ready, streaming, memory-stable, faster than fast-csv for raw drain/count workloads.
+- CSV: production-ready, streaming, memory-stable, faster than parser-backed libraries for count-only drain workloads, and roughly at parity with fast-csv when parsing row objects.
 - XLSX: faster and lower-memory than SheetJS and ExcelJS on the tracked fixture.
-- fast-csv: still a strong general-purpose row parser, but slower when the workload only needs row counts.
-- SheetJS: compact and mature, but now behind Sheetra on the tracked XLSX and raw CSV drain benchmarks.
+- fast-csv: still a strong general-purpose row parser; Sheetra's big CSV win is specifically the count-only fast path.
+- SheetJS: compact and mature; faster on raw CSV row decode here, but much higher-memory on the tracked 244MB CSV and behind Sheetra on the tracked XLSX benchmark.
 
 Sheetra’s advantage is:
 

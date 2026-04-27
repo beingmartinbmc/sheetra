@@ -21,6 +21,7 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
+    "coverage": "vitest run --coverage",
     "lint": "eslint \"src/**/*.ts\" \"test/**/*.ts\" \"benchmark/**/*.ts\"",
     "format": "prettier --write .",
     "benchmark": "tsx benchmark/streaming.ts",
