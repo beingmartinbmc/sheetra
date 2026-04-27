@@ -5,10 +5,10 @@ import { fileURLToPath } from "node:url";
 import { formatBytes } from "../../src/index.js";
 
 interface IsolatedResult {
-  file: string;
+  workload: string;
+  rows: number | string;
   size: string;
   engine: string;
-  rows: number | string;
   timeMs: number | string;
   peakRss: string;
   notes: string;
@@ -19,50 +19,76 @@ const fixtureDir = join(process.cwd(), "benchmark", "files");
 const runs = Number(process.env.SHEETRA_BENCH_RUNS ?? 2);
 const includeMemoryHeavyDefault = process.env.SHEETRA_BENCH_INCLUDE_MEMORY === "1";
 const memoryHeavyLimitBytes = Number(process.env.SHEETRA_BENCH_MEMORY_LIMIT_MB ?? 100) * 1024 * 1024;
+const writeRows = Number(process.env.SHEETRA_BENCH_WRITE_ROWS ?? 100000);
+const skipWrite = process.env.SHEETRA_BENCH_SKIP_WRITE === "1";
+const skipRead = process.env.SHEETRA_BENCH_SKIP_READ === "1";
 
-const files = await discoverFiles();
 const aggregated: IsolatedResult[] = [];
 
-for (const file of files) {
-  const fileStat = await stat(file);
-  const extension = extname(file).toLowerCase();
-  const engines = enginesFor(extension);
+if (!skipRead) {
+  const files = await discoverFiles();
+  for (const file of files) {
+    const fileStat = await stat(file);
+    const extension = extname(file).toLowerCase();
+    const engines = readEnginesFor(extension);
 
-  for (const engine of engines) {
-    const heavy = engine.heavy === true && fileStat.size > memoryHeavyLimitBytes;
-    if (heavy && !includeMemoryHeavyDefault) {
+    for (const engine of engines) {
+      const heavy = engine.heavy === true && fileStat.size > memoryHeavyLimitBytes;
+      if (heavy && !includeMemoryHeavyDefault) {
+        aggregated.push({
+          workload: readWorkloadLabel(extension),
+          rows: "skipped",
+          size: formatBytes(fileStat.size),
+          engine: engine.name,
+          timeMs: "skipped",
+          peakRss: "skipped",
+          notes: `set SHEETRA_BENCH_INCLUDE_MEMORY=1 to run files over ${formatBytes(memoryHeavyLimitBytes)}`,
+        });
+        continue;
+      }
+
+      const samples = await runMultiple(file, engine.name, runs);
+      if (samples.length === 0) {
+        aggregated.push({
+          workload: readWorkloadLabel(extension),
+          rows: "failed",
+          size: formatBytes(fileStat.size),
+          engine: engine.name,
+          timeMs: "failed",
+          peakRss: "failed",
+          notes: "runner failed",
+        });
+        continue;
+      }
+
+      const best = samples.reduce((a, b) => (a.timeMs <= b.timeMs ? a : b));
+      const minRss = samples.reduce((a, b) => (a.peakRssBytes <= b.peakRssBytes ? a : b));
       aggregated.push({
-        file: basename(file),
+        workload: readWorkloadLabel(extension),
+        rows: best.rows,
         size: formatBytes(fileStat.size),
         engine: engine.name,
-        rows: "skipped",
-        timeMs: "skipped",
-        peakRss: "skipped",
-        notes: `set SHEETRA_BENCH_INCLUDE_MEMORY=1 to run files over ${formatBytes(memoryHeavyLimitBytes)}`,
+        timeMs: best.timeMs,
+        peakRss: formatBytes(minRss.peakRssBytes),
+        notes: `best of ${samples.length}`,
       });
-      continue;
     }
+  }
+}
 
-    const samples: { timeMs: number; peakRssBytes: number; rows: number }[] = [];
-    let lastError: string | undefined;
-    for (let run = 0; run < runs; run += 1) {
-      try {
-        samples.push(await runIsolated(file, engine.name));
-      } catch (error) {
-        lastError = error instanceof Error ? error.message : String(error);
-        break;
-      }
-    }
-
+if (!skipWrite) {
+  const writeEngines = writeEngineSpecs();
+  for (const engine of writeEngines) {
+    const samples = await runMultipleWrite(engine.name, writeRows, runs);
     if (samples.length === 0) {
       aggregated.push({
-        file: basename(file),
-        size: formatBytes(fileStat.size),
-        engine: engine.name,
+        workload: engine.workload,
         rows: "failed",
+        size: "-",
+        engine: engine.name,
         timeMs: "failed",
         peakRss: "failed",
-        notes: lastError ?? "unknown error",
+        notes: "runner failed",
       });
       continue;
     }
@@ -70,13 +96,13 @@ for (const file of files) {
     const best = samples.reduce((a, b) => (a.timeMs <= b.timeMs ? a : b));
     const minRss = samples.reduce((a, b) => (a.peakRssBytes <= b.peakRssBytes ? a : b));
     aggregated.push({
-      file: basename(file),
-      size: formatBytes(fileStat.size),
+      workload: engine.workload,
+      rows: writeRows,
+      size: "-",
       engine: engine.name,
-      rows: best.rows,
       timeMs: best.timeMs,
       peakRss: formatBytes(minRss.peakRssBytes),
-      notes: `best of ${samples.length} fresh-process runs`,
+      notes: `best of ${samples.length}`,
     });
   }
 }
@@ -85,6 +111,10 @@ if (aggregated.length === 0) {
   console.log(`No benchmark fixtures found in ${fixtureDir}. Add CSV or XLSX files and rerun.`);
 } else {
   console.table(aggregated);
+}
+
+function readWorkloadLabel(extension: string): string {
+  return extension === ".csv" ? "CSV Read" : "XLSX Read";
 }
 
 async function discoverFiles(): Promise<string[]> {
@@ -106,7 +136,12 @@ interface EngineSpec {
   heavy?: boolean;
 }
 
-function enginesFor(extension: string): EngineSpec[] {
+interface WriteEngineSpec {
+  name: string;
+  workload: string;
+}
+
+function readEnginesFor(extension: string): EngineSpec[] {
   if (extension === ".csv") {
     return [
       { name: "sheetra-raw-drain" },
@@ -118,20 +153,66 @@ function enginesFor(extension: string): EngineSpec[] {
   return [{ name: "sheetra" }, { name: "sheetjs" }, { name: "exceljs" }];
 }
 
-function runIsolated(file: string, engine: string): Promise<{ timeMs: number; peakRssBytes: number; rows: number }> {
+function writeEngineSpecs(): WriteEngineSpec[] {
+  return [
+    { name: "sheetra-write-csv", workload: "CSV Write" },
+    { name: "fastcsv-write", workload: "CSV Write" },
+    { name: "sheetjs-write-csv", workload: "CSV Write" },
+    { name: "sheetra-write-xlsx", workload: "XLSX Write" },
+    { name: "sheetjs-write-xlsx", workload: "XLSX Write" },
+    { name: "exceljs-write-xlsx", workload: "XLSX Write" },
+  ];
+}
+
+async function runMultiple(
+  file: string,
+  engine: string,
+  count: number,
+): Promise<Array<{ timeMs: number; peakRssBytes: number; rows: number }>> {
+  const samples: Array<{ timeMs: number; peakRssBytes: number; rows: number }> = [];
+  for (let i = 0; i < count; i++) {
+    try {
+      samples.push(await runIsolated(file, engine));
+    } catch {
+      break;
+    }
+  }
+  return samples;
+}
+
+async function runMultipleWrite(
+  engine: string,
+  rowCount: number,
+  count: number,
+): Promise<Array<{ timeMs: number; peakRssBytes: number; rows: number }>> {
+  const samples: Array<{ timeMs: number; peakRssBytes: number; rows: number }> = [];
+  for (let i = 0; i < count; i++) {
+    try {
+      samples.push(await runIsolated("__write__", engine, { SHEETRA_BENCH_WRITE_ROWS: String(rowCount) }));
+    } catch {
+      break;
+    }
+  }
+  return samples;
+}
+
+function runIsolated(
+  file: string,
+  engine: string,
+  extraEnv: Record<string, string> = {},
+): Promise<{ timeMs: number; peakRssBytes: number; rows: number }> {
   return new Promise((resolve, reject) => {
     const tsx = join(process.cwd(), "node_modules", ".bin", "tsx");
     const script = join(here, "runner.ts");
-    const child = spawn(tsx, [script, file, engine], { stdio: ["ignore", "pipe", "pipe"] });
+    const child = spawn(tsx, [script, file, engine], {
+      stdio: ["ignore", "pipe", "pipe"],
+      env: { ...process.env, ...extraEnv },
+    });
 
     let stdout = "";
     let stderr = "";
-    child.stdout.on("data", (chunk: Buffer) => {
-      stdout += chunk.toString("utf8");
-    });
-    child.stderr.on("data", (chunk: Buffer) => {
-      stderr += chunk.toString("utf8");
-    });
+    child.stdout.on("data", (chunk: Buffer) => { stdout += chunk.toString("utf8"); });
+    child.stderr.on("data", (chunk: Buffer) => { stderr += chunk.toString("utf8"); });
     child.on("error", reject);
     child.on("exit", (code) => {
       if (code !== 0) {

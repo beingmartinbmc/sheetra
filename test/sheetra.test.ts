@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { strToU8, zipSync } from "fflate";
 import { describe, expect, it } from "vitest";
-import { drainCsvViaEvents } from "../src/csv/index.js";
+import { drainCsvViaEvents, collectCsvViaEvents } from "../src/csv/index.js";
 import {
   FormulaEngine,
   PluginRegistry,
@@ -613,7 +613,9 @@ describe("Additional pipeline, CSV, and XLSX coverage", () => {
     await expect(read(Buffer.from('id;note\r\n1;"done";\r\n2;"at eof"'), { format: "csv", delimiter: ";" }).drain()).resolves.toMatchObject({
       rowsProcessed: 2,
     });
-    await expect(drainCsvViaEvents(Buffer.from("id||name\n1||Ada\n"), { delimiter: "||" })).rejects.toThrow();
+    await expect(drainCsvViaEvents(Buffer.from("id||name\n1||Ada\n"), { delimiter: "||" })).rejects.toThrow(
+      "delimiter must be a single character",
+    );
   });
 
   it("covers schema branches for no-dedupe cleaning, boolean false coercion, and unknown kinds", () => {
@@ -732,6 +734,502 @@ describe("Additional pipeline, CSV, and XLSX coverage", () => {
     await expect(workerMap([{ value: 1 }], "() => { throw new Error('boom') }", { concurrency: 1 })).rejects.toThrow(
       "boom",
     );
+  });
+});
+
+describe("Optimization-specific tests", () => {
+  it("custom CSV parser handles quoted fields with embedded newlines", async () => {
+    const csv = Buffer.from('name,bio\nAda,"line1\nline2"\nGrace,"she said ""hello"""\n');
+    const rows = await read(csv, { format: "csv" }).collect();
+    expect(rows).toEqual([
+      { name: "Ada", bio: "line1\nline2" },
+      { name: "Grace", bio: 'she said "hello"' },
+    ]);
+  });
+
+  it("custom CSV parser handles CRLF, CR-only, and mixed line endings", async () => {
+    const crlf = Buffer.from("a,b\r\n1,2\r\n3,4\r\n");
+    const cr = Buffer.from("a,b\r1,2\r3,4\r");
+    const mixed = Buffer.from("a,b\n1,2\r\n3,4\r");
+
+    expect(await read(crlf, { format: "csv" }).collect()).toEqual([{ a: "1", b: "2" }, { a: "3", b: "4" }]);
+    expect(await read(cr, { format: "csv" }).collect()).toEqual([{ a: "1", b: "2" }, { a: "3", b: "4" }]);
+    expect(await read(mixed, { format: "csv" }).collect()).toEqual([{ a: "1", b: "2" }, { a: "3", b: "4" }]);
+  });
+
+  it("custom CSV parser handles empty fields and trailing delimiters", async () => {
+    const csv = Buffer.from("a,b,c\n1,,3\n,2,\n");
+    const rows = await read(csv, { format: "csv" }).collect();
+    expect(rows).toEqual([
+      { a: "1", b: "", c: "3" },
+      { a: "", b: "2", c: "" },
+    ]);
+  });
+
+  it("custom CSV parser handles file ending without trailing newline", async () => {
+    const csv = Buffer.from("x,y\n1,2");
+    const rows = await read(csv, { format: "csv" }).collect();
+    expect(rows).toEqual([{ x: "1", y: "2" }]);
+  });
+
+  it("custom CSV parser skips empty rows", async () => {
+    const csv = Buffer.from("a,b\n\n1,2\n\n3,4\n\n");
+    const rows = await read(csv, { format: "csv" }).collect();
+    expect(rows).toEqual([{ a: "1", b: "2" }, { a: "3", b: "4" }]);
+  });
+
+  it("custom CSV parser handles single-column CSV", async () => {
+    const csv = Buffer.from("id\n1\n2\n3\n");
+    const rows = await read(csv, { format: "csv" }).collect();
+    expect(rows).toEqual([{ id: "1" }, { id: "2" }, { id: "3" }]);
+  });
+
+  it("collectCsvViaEvents uses native parser for single-char delimiter", async () => {
+    const csv = Buffer.from("a,b\n1,2\n3,4\n");
+    const rows = await collectCsvViaEvents(csv, { format: "csv" });
+    expect(rows).toEqual([{ a: "1", b: "2" }, { a: "3", b: "4" }]);
+  });
+
+  it("collectCsvViaEvents rejects multi-char delimiter", async () => {
+    await expect(collectCsvViaEvents(Buffer.from("a||b\n1||2\n"), { delimiter: "||" })).rejects.toThrow(
+      "delimiter must be a single character",
+    );
+  });
+
+  it("drainCsvViaEvents rejects multi-char delimiter", async () => {
+    await expect(drainCsvViaEvents(Buffer.from("a||b\n1||2\n"), { delimiter: "||" })).rejects.toThrow(
+      "delimiter must be a single character",
+    );
+  });
+
+  it("custom CSV parser with explicit headers array", async () => {
+    const csv = Buffer.from("1,Ada\n2,Grace\n");
+    const rows = await read(csv, { format: "csv", headers: ["id", "name"] }).collect();
+    expect(rows).toEqual([{ id: "1", name: "Ada" }, { id: "2", name: "Grace" }]);
+  });
+
+  it("custom CSV parser with inferTypes on native path", async () => {
+    const csv = Buffer.from("name,score,active\nAda,42,true\n");
+    const rows = await read(csv, { format: "csv", inferTypes: true }).collect();
+    expect(rows).toEqual([{ name: "Ada", score: 42, active: true }]);
+  });
+
+  it("readCsv rejects multi-char delimiter", async () => {
+    await expect(async () => {
+      const collected: unknown[] = [];
+      for await (const row of readCsv(Buffer.from("a||b\n1||2\n"), { delimiter: "||" })) {
+        collected.push(row);
+      }
+    }).rejects.toThrow("delimiter must be a single character");
+  });
+
+  it("readCsv with headers:false and inferTypes on native path", async () => {
+    const collected: unknown[] = [];
+    for await (const row of readCsv(Buffer.from("Ada,10,true\n"), { headers: false, inferTypes: true })) {
+      collected.push(row);
+    }
+    expect(collected).toEqual([{ _1: "Ada", _2: 10, _3: true }]);
+  });
+
+  it("pipeline fusion correctly fuses multiple map and filter operations", async () => {
+    const rows = await read([
+      { name: "Ada", score: 10 },
+      { name: "Grace", score: 3 },
+      { name: "Linus", score: 8 },
+    ])
+      .map((row) => ({ ...row, doubled: Number(row.score) * 2 }))
+      .filter((row) => row.doubled > 10)
+      .map((row) => ({ name: row.name, doubled: row.doubled }))
+      .collect();
+
+    expect(rows).toEqual([
+      { name: "Ada", doubled: 20 },
+      { name: "Linus", doubled: 16 },
+    ]);
+  });
+
+  it("fused pipeline drain skips fast path when operations are pending", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "sheetra-"));
+    const file = join(dir, "fuse.csv");
+    await write(Array.from({ length: 100 }, (_, i) => ({ id: i })), file, { format: "csv" });
+
+    const stats = await read(file).map((row) => row).drain();
+    expect(stats.rowsProcessed).toBe(100);
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  it("fused pipeline collect skips fast path when operations are pending", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "sheetra-"));
+    const file = join(dir, "fuse2.csv");
+    await write([{ x: "1" }, { x: "2" }], file, { format: "csv" });
+
+    const rows = await read(file).filter(() => true).collect();
+    expect(rows).toHaveLength(2);
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  it("selective XLSX unzip only decompresses needed entries for readXlsx", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "sheetra-"));
+    const file = join(dir, "selective.xlsx");
+
+    await writeWorkbook(
+      workbook([
+        worksheet("Sheet1", [{ id: 1 }, { id: 2 }]),
+        worksheet("Sheet2", [{ name: "Ada" }]),
+      ]),
+      file,
+    );
+
+    const rows = await read(file, { sheet: 0 }).collect();
+    expect(rows).toEqual([{ id: 1 }, { id: 2 }]);
+
+    const sheet2 = await read(file, { sheet: "Sheet2" }).collect();
+    expect(sheet2).toEqual([{ name: "Ada" }]);
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  it("lazy shared strings resolves strings on demand and caches them", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "sheetra-"));
+    const file = join(dir, "lazy.xlsx");
+
+    const files = {
+      "xl/workbook.xml": strToU8(
+        '<workbook xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="Sheet1" sheetId="1" r:id="rId1"/></sheets></workbook>',
+      ),
+      "xl/_rels/workbook.xml.rels": strToU8(
+        '<Relationships><Relationship Id="rId1" Target="worksheets/sheet1.xml"/></Relationships>',
+      ),
+      "xl/sharedStrings.xml": strToU8(
+        "<sst><si><t>unused1</t></si><si><t>header</t></si><si><t>unused2</t></si><si><t>value</t></si></sst>",
+      ),
+      "xl/worksheets/sheet1.xml": strToU8(
+        '<worksheet><sheetData><row r="1"><c r="A1" t="s"><v>1</v></c></row><row r="2"><c r="A2" t="s"><v>3</v></c></row></sheetData></worksheet>',
+      ),
+    };
+
+    await writeFile(file, Buffer.from(zipSync(files)));
+    const rows = await read(file).collect();
+    expect(rows).toEqual([{ header: "value" }]);
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  it("lazy shared strings handles out-of-range index", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "sheetra-"));
+    const file = join(dir, "oob.xlsx");
+
+    const files = {
+      "xl/workbook.xml": strToU8(
+        '<workbook xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="Sheet1" sheetId="1" r:id="rId1"/></sheets></workbook>',
+      ),
+      "xl/_rels/workbook.xml.rels": strToU8(
+        '<Relationships><Relationship Id="rId1" Target="worksheets/sheet1.xml"/></Relationships>',
+      ),
+      "xl/sharedStrings.xml": strToU8("<sst><si><t>name</t></si></sst>"),
+      "xl/worksheets/sheet1.xml": strToU8(
+        '<worksheet><sheetData><row r="1"><c r="A1" t="s"><v>0</v></c></row><row r="2"><c r="A2" t="s"><v>99</v></c></row></sheetData></worksheet>',
+      ),
+    };
+
+    await writeFile(file, Buffer.from(zipSync(files)));
+    const rows = await read(file).collect();
+    expect(rows).toEqual([{ name: "" }]);
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  it("XLSX dimension tag enables pre-allocated row arrays", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "sheetra-"));
+    const file = join(dir, "dim.xlsx");
+
+    await writeWorkbook(
+      workbook([worksheet("Sheet1", [{ a: 1, b: 2, c: 3 }])]),
+      file,
+    );
+
+    const rows = await read(file).collect();
+    expect(rows).toEqual([{ a: 1, b: 2, c: 3 }]);
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  it("XLSX workbook parser handles sheetData-like tag names without false matching", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "sheetra-"));
+    const file = join(dir, "sheetdata.xlsx");
+
+    const files = {
+      "xl/workbook.xml": strToU8(
+        '<workbook xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="Data" sheetId="1" r:id="rId1"/></sheets></workbook>',
+      ),
+      "xl/_rels/workbook.xml.rels": strToU8(
+        '<Relationships><Relationship Id="rId1" Target="worksheets/sheet1.xml"/></Relationships>',
+      ),
+      "xl/worksheets/sheet1.xml": strToU8(
+        '<worksheet><sheetData><row r="1"><c t="inlineStr"><is><t>val</t></is></c></row><row r="2"><c><v>42</v></c></row></sheetData></worksheet>',
+      ),
+    };
+
+    await writeFile(file, Buffer.from(zipSync(files)));
+    const rows = await read(file).collect();
+    expect(rows).toEqual([{ val: 42 }]);
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  it("CSV write respects backpressure without data loss", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "sheetra-"));
+    const file = join(dir, "backpressure.csv");
+
+    const bigRows = Array.from({ length: 1000 }, (_, i) => ({ id: i, data: "x".repeat(100) }));
+    await write(bigRows, file, { format: "csv" });
+
+    const readBack = await read(file).collect();
+    expect(readBack).toHaveLength(1000);
+    expect(readBack[999]).toMatchObject({ id: "999", data: "x".repeat(100) });
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  it("pipeline fusion works with async mappers", async () => {
+    const rows = await read([{ v: 1 }, { v: 2 }, { v: 3 }])
+      .map(async (row) => {
+        await new Promise((resolve) => setTimeout(resolve, 1));
+        return { v: Number(row.v) * 10 };
+      })
+      .filter((row) => row.v > 10)
+      .collect();
+
+    expect(rows).toEqual([{ v: 20 }, { v: 30 }]);
+  });
+
+  it("readWorkbook with selective unzip reads all sheets via full unzip", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "sheetra-"));
+    const file = join(dir, "multi.xlsx");
+
+    await writeWorkbook(
+      workbook([
+        worksheet("A", [{ x: 1 }]),
+        worksheet("B", [{ y: 2 }]),
+      ]),
+      file,
+    );
+
+    const book = await readWorkbook(file);
+    expect(book.sheets).toHaveLength(2);
+    expect(book.sheets[0]?.rows).toEqual([{ x: 1 }]);
+    expect(book.sheets[1]?.rows).toEqual([{ y: 2 }]);
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  it("custom CSV parser handles quoted fields spanning multiple chunks", async () => {
+    const csv = Buffer.from('name,note\nAda,"this is a very long note that spans across buffer boundaries easily"\n');
+    const rows = await read(csv, { format: "csv" }).collect();
+    expect(rows).toEqual([{ name: "Ada", note: "this is a very long note that spans across buffer boundaries easily" }]);
+  });
+
+  it("custom CSV parser handles only-header CSV with no data rows", async () => {
+    const csv = Buffer.from("a,b,c\n");
+    const rows = await read(csv, { format: "csv" }).collect();
+    expect(rows).toEqual([]);
+  });
+
+  it("custom CSV parser handles CSV with more fields than headers", async () => {
+    const csv = Buffer.from("a,b\n1,2,3\n");
+    const rows = await read(csv, { format: "csv" }).collect();
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ a: "1", b: "2" });
+  });
+
+  it("XLSX without shared strings works correctly", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "sheetra-"));
+    const file = join(dir, "noss.xlsx");
+    const files = {
+      "xl/workbook.xml": strToU8(
+        '<workbook xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="Sheet1" sheetId="1" r:id="rId1"/></sheets></workbook>',
+      ),
+      "xl/_rels/workbook.xml.rels": strToU8(
+        '<Relationships><Relationship Id="rId1" Target="worksheets/sheet1.xml"/></Relationships>',
+      ),
+      "xl/worksheets/sheet1.xml": strToU8(
+        '<worksheet><sheetData><row r="1"><c t="inlineStr"><is><t>x</t></is></c></row><row r="2"><c><v>42</v></c></row></sheetData></worksheet>',
+      ),
+    };
+
+    await writeFile(file, Buffer.from(zipSync(files)));
+    const rows = await read(file).collect();
+    expect(rows).toEqual([{ x: 42 }]);
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  it("drain validation error in fused pipeline is counted", async () => {
+    const stats = await read([{ id: "bad" }])
+      .map((row) => row)
+      .schema({ id: schema.number() })
+      .drain();
+    expect(stats.errors).toBe(0);
+  });
+
+  it("pipeline schema with skip validation mode drops invalid rows silently", async () => {
+    const rows = await read([{ id: "1" }, { id: "bad" }, { id: "3" }])
+      .schema({ id: schema.number() }, { validation: "skip" })
+      .collect();
+    expect(rows).toEqual([{ id: 1 }, { id: 3 }]);
+  });
+
+  it("custom CSV parser with headerless reading", async () => {
+    const collected: unknown[] = [];
+    for await (const row of readCsv(Buffer.from("1,2\n3,4\n"), { headers: false })) {
+      collected.push(row);
+    }
+    expect(collected).toEqual([
+      { _1: "1", _2: "2" },
+      { _1: "3", _2: "4" },
+    ]);
+  });
+
+  it("parseLastRecord handles quoted fields in the final record without trailing newline", async () => {
+    const csv = Buffer.from('a,b\n"hello","world"');
+    const rows = await read(csv, { format: "csv" }).collect();
+    expect(rows).toEqual([{ a: "hello", b: "world" }]);
+  });
+
+  it("parseLastRecord handles CR+LF in the final record", async () => {
+    const csv = Buffer.from("a,b\n1,2\r\n3,4");
+    const rows = await read(csv, { format: "csv" }).collect();
+    expect(rows).toEqual([{ a: "1", b: "2" }, { a: "3", b: "4" }]);
+  });
+
+  it("parseLastRecord handles delimiter in final unterminated record", async () => {
+    const csv = Buffer.from("a,b,c\n1,2,3");
+    const rows = await read(csv, { format: "csv" }).collect();
+    expect(rows).toEqual([{ a: "1", b: "2", c: "3" }]);
+  });
+
+  it("parseLastRecord handles multiple line-ending records followed by unterminated last record", async () => {
+    const csv = Buffer.from("x\n1\n2\n3");
+    const rows = await read(csv, { format: "csv" }).collect();
+    expect(rows).toEqual([{ x: "1" }, { x: "2" }, { x: "3" }]);
+  });
+
+  it("native CSV parser with headers:false auto-generates column names", async () => {
+    const csv = Buffer.from("a,b\nc,d\n");
+    const rows = await read(csv, { format: "csv", headers: false }).collect();
+    expect(rows).toEqual([{ _1: "a", _2: "b" }, { _1: "c", _2: "d" }]);
+  });
+
+  it("custom CSV parser with CR-only line endings and quoted fields in last record", async () => {
+    const csv = Buffer.from('a,b\r1,"two"\r3,"four"');
+    const rows = await read(csv, { format: "csv" }).collect();
+    expect(rows).toEqual([{ a: "1", b: "two" }, { a: "3", b: "four" }]);
+  });
+
+  it("collectCsvViaEvents with inferTypes returns inferred values", async () => {
+    const csv = Buffer.from("name,score\nAda,42\n");
+    const rows = await collectCsvViaEvents(csv, { inferTypes: true });
+    expect(rows).toEqual([{ name: "Ada", score: 42 }]);
+  });
+
+  it("XLSX lazy shared strings length property works", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "sheetra-"));
+    const file = join(dir, "len.xlsx");
+    const files = {
+      "xl/workbook.xml": strToU8(
+        '<workbook xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="Sheet1" sheetId="1" r:id="rId1"/></sheets></workbook>',
+      ),
+      "xl/_rels/workbook.xml.rels": strToU8(
+        '<Relationships><Relationship Id="rId1" Target="worksheets/sheet1.xml"/></Relationships>',
+      ),
+      "xl/sharedStrings.xml": strToU8("<sst><si><t>a</t></si><si><t>b</t></si><si><t>c</t></si></sst>"),
+      "xl/worksheets/sheet1.xml": strToU8(
+        '<worksheet><sheetData><row r="1"><c r="A1" t="s"><v>0</v></c></row><row r="2"><c r="A2" t="s"><v>1</v></c></row></sheetData></worksheet>',
+      ),
+    };
+    await writeFile(file, Buffer.from(zipSync(files)));
+    const rows = await read(file).collect();
+    expect(rows).toEqual([{ a: "b" }]);
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  it("pipeline fused drain propagates validation errors correctly", async () => {
+    const stats = await read([{ id: "bad" }, { id: "also bad" }])
+      .filter(() => true)
+      .schema({ id: schema.number() }, { validation: "fail-fast" })
+      .drain();
+    expect(stats.errors).toBe(1);
+  });
+
+  it("pipeline fused process propagates non-validation errors", async () => {
+    const failing = new ReadableStreamLike([{ id: 1 }], new Error("fused boom"));
+    await expect(read(failing).map((row) => row).process()).rejects.toThrow("fused boom");
+  });
+
+  it("parseLastRecord handles escaped quotes in final unterminated record", async () => {
+    const csv = Buffer.from('name\n"Ada ""The"" Great"');
+    const rows = await read(csv, { format: "csv" }).collect();
+    expect(rows).toEqual([{ name: 'Ada "The" Great' }]);
+  });
+
+  it("parseLastRecord handles CR in final tail buffer", async () => {
+    const csv = Buffer.from("a,b\n1,2\r3,4");
+    const rows = await read(csv, { format: "csv" }).collect();
+    expect(rows).toEqual([{ a: "1", b: "2" }, { a: "3", b: "4" }]);
+  });
+
+  it("parseLastRecord handles CRLF in final tail buffer", async () => {
+    const csv = Buffer.from("a\n1\r\n2");
+    const rows = await read(csv, { format: "csv" }).collect();
+    expect(rows).toEqual([{ a: "1" }, { a: "2" }]);
+  });
+
+  it("parseLastRecord handles quoted field at start of final record", async () => {
+    const csv = Buffer.from('a,b\n"x",y');
+    const rows = await read(csv, { format: "csv" }).collect();
+    expect(rows).toEqual([{ a: "x", b: "y" }]);
+  });
+
+  it("XLSX dimension tag produces correct column count for pre-allocation", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "sheetra-"));
+    const file = join(dir, "widedim.xlsx");
+    await writeWorkbook(workbook([worksheet("Sheet1", [{ a: 1, b: 2, c: 3, d: 4, e: 5 }])]), file);
+    const rows = await read(file).collect();
+    expect(rows).toEqual([{ a: 1, b: 2, c: 3, d: 4, e: 5 }]);
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  it("custom CSV parser with header-only file and no trailing newline returns empty", async () => {
+    const csv = Buffer.from("a,b");
+    const rows = await read(csv, { format: "csv" }).collect();
+    expect(rows).toEqual([]);
+  });
+
+  it("XLSX fallback path handles worksheet not found in non-meta archive", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "sheetra-"));
+    const file = join(dir, "nofb.xlsx");
+    await writeFile(
+      file,
+      Buffer.from(zipSync({
+        "xl/worksheets/sheet1.xml": strToU8(
+          '<worksheet><sheetData><row><c t="inlineStr"><is><t>x</t></is></c></row></sheetData></worksheet>',
+        ),
+      })),
+    );
+    await expect(read(file, { sheet: "Missing" }).collect()).rejects.toThrow("Worksheet not found");
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  it("XLSX with dimension tag pre-allocates row array for correct column count", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "sheetra-"));
+    const file = join(dir, "dim.xlsx");
+    const files = {
+      "xl/workbook.xml": strToU8(
+        '<workbook xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="Sheet1" sheetId="1" r:id="rId1"/></sheets></workbook>',
+      ),
+      "xl/_rels/workbook.xml.rels": strToU8(
+        '<Relationships><Relationship Id="rId1" Target="worksheets/sheet1.xml"/></Relationships>',
+      ),
+      "xl/worksheets/sheet1.xml": strToU8(
+        '<worksheet><dimension ref="A1:C3"/><sheetData><row r="1"><c r="A1" t="inlineStr"><is><t>a</t></is></c><c r="B1" t="inlineStr"><is><t>b</t></is></c><c r="C1" t="inlineStr"><is><t>c</t></is></c></row><row r="2"><c r="A2"><v>1</v></c><c r="C2"><v>3</v></c></row></sheetData></worksheet>',
+      ),
+    };
+    await writeFile(file, Buffer.from(zipSync(files)));
+    const rows = await read(file).collect();
+    expect(rows).toEqual([{ a: 1, b: null, c: 3 }]);
+    await rm(dir, { recursive: true, force: true });
   });
 });
 
