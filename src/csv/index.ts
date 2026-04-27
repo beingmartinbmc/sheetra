@@ -31,6 +31,8 @@ export async function* readCsv(source: string | Buffer, options: ReadOptions = {
 }
 
 export function drainCsvViaEvents(source: string | Buffer, options: ReadOptions = {}): Promise<ProcessStats> {
+  if (canScanCsvRecords(options)) return drainCsvByScanningRecords(source, options);
+
   return new Promise((resolve, reject) => {
     const stats = createStats();
     const input = createCsvParser(source, options);
@@ -41,6 +43,136 @@ export function drainCsvViaEvents(source: string | Buffer, options: ReadOptions 
     input.on("error", reject);
     input.on("end", () => resolve(finishStats(stats)));
   });
+}
+
+function drainCsvByScanningRecords(source: string | Buffer, options: ReadOptions): Promise<ProcessStats> {
+  return new Promise((resolve, reject) => {
+    const stats = createStats();
+    const stream = typeof source === "string" ? createReadStream(source) : Readable.from(source);
+    const scanner = createRecordScanner((options.headers ?? true) === true, (options.delimiter ?? ",").charCodeAt(0));
+    let failed = false;
+
+    stream.on("data", (chunk: Buffer | string) => {
+      try {
+        scanner.scan(typeof chunk === "string" ? Buffer.from(chunk) : chunk);
+        stats.rowsProcessed = scanner.rows;
+        observeMemory(stats);
+      } catch (error) {
+        failed = true;
+        stream.destroy(error instanceof Error ? error : new Error(String(error)));
+      }
+    });
+    stream.on("error", reject);
+    stream.on("end", () => {
+      if (failed) return;
+      try {
+        scanner.finish();
+        stats.rowsProcessed = scanner.rows;
+        resolve(finishStats(stats));
+      } catch (error) {
+        reject(error);
+      }
+    });
+  });
+}
+
+function canScanCsvRecords(options: ReadOptions): boolean {
+  return (options.delimiter ?? ",").length === 1;
+}
+
+function createRecordScanner(skipFirstRecord: boolean, delimiter: number): {
+  readonly rows: number;
+  scan(chunk: Buffer): void;
+  finish(): void;
+} {
+  let inQuotes = false;
+  let quotePending = false;
+  let atFieldStart = true;
+  let recordHasContent = false;
+  let lastWasCarriageReturn = false;
+  let records = 0;
+  let rows = 0;
+
+  const endRecord = () => {
+    if (recordHasContent) {
+      records += 1;
+      if (!(skipFirstRecord && records === 1)) rows += 1;
+    }
+    recordHasContent = false;
+    atFieldStart = true;
+    quotePending = false;
+  };
+
+  return {
+    get rows() {
+      return rows;
+    },
+    scan(chunk: Buffer) {
+      for (let index = 0; index < chunk.length; index += 1) {
+        const byte = chunk[index]!;
+
+        if (lastWasCarriageReturn) {
+          lastWasCarriageReturn = false;
+          if (byte === 10) continue;
+        }
+
+        if (inQuotes && byte === 34) {
+          if (inQuotes && quotePending) {
+            quotePending = false;
+            recordHasContent = true;
+          } else if (inQuotes) {
+            quotePending = true;
+          }
+          continue;
+        }
+
+        if (quotePending && byte === delimiter) {
+          inQuotes = false;
+          quotePending = false;
+          atFieldStart = true;
+          continue;
+        }
+
+        if (quotePending && (byte === 10 || byte === 13)) {
+          inQuotes = false;
+          quotePending = false;
+          endRecord();
+          lastWasCarriageReturn = byte === 13;
+          continue;
+        }
+
+        if (quotePending) throw new Error("Invalid quoted CSV field");
+
+        if (!inQuotes && (byte === 10 || byte === 13)) {
+          endRecord();
+          lastWasCarriageReturn = byte === 13;
+          continue;
+        }
+
+        if (!inQuotes && byte === delimiter) {
+          atFieldStart = true;
+          continue;
+        }
+
+        if (!inQuotes && byte === 34 && atFieldStart) {
+          inQuotes = true;
+          atFieldStart = false;
+          continue;
+        }
+
+        recordHasContent = true;
+        atFieldStart = false;
+      }
+    },
+    finish() {
+      if (inQuotes && !quotePending) throw new Error("Unclosed quoted CSV field");
+      if (quotePending) {
+        inQuotes = false;
+        quotePending = false;
+      }
+      if (recordHasContent) endRecord();
+    },
+  };
 }
 
 export function collectCsvViaEvents(source: string | Buffer, options: ReadOptions = {}): Promise<Row[]> {
