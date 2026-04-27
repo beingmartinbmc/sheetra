@@ -1,3 +1,4 @@
+import { writeFile } from "node:fs/promises";
 import type { Row } from "../types.js";
 
 export interface DiffOptions {
@@ -45,6 +46,23 @@ export function diff(oldRows: Iterable<Row>, newRows: Iterable<Row>, options: Di
   return { added, removed, changed, unchanged };
 }
 
+export async function writeDiffReport(result: DiffResult, destination: string): Promise<void> {
+  const rows = [
+    ["type", "key", "changedColumns", "before", "after"],
+    ...result.added.map((row) => ["added", keyPreview(row), "", "", JSON.stringify(row)]),
+    ...result.removed.map((row) => ["removed", keyPreview(row), "", JSON.stringify(row), ""]),
+    ...result.changed.map((change) => [
+      "changed",
+      change.key,
+      change.changedColumns.join("|"),
+      JSON.stringify(change.before),
+      JSON.stringify(change.after),
+    ]),
+  ];
+
+  await writeFile(destination, rows.map((row) => row.map(csvEscape).join(",")).join("\n") + "\n");
+}
+
 function indexByKey(rows: Iterable<Row>, key: string | string[]): Map<string, Row> {
   const keys = Array.isArray(key) ? key : [key];
   const index = new Map<string, Row>();
@@ -60,4 +78,16 @@ function changedColumnsFor(before: Row, after: Row): string[] {
 function sameValue(left: unknown, right: unknown): boolean {
   if (left instanceof Date && right instanceof Date) return left.getTime() === right.getTime();
   return JSON.stringify(left) === JSON.stringify(right);
+}
+
+function keyPreview(row: Row): string {
+  return Object.values(row)
+    .slice(0, 3)
+    .map((value) => String(value ?? ""))
+    .join("|");
+}
+
+function csvEscape(value: unknown): string {
+  const text = String(value);
+  return /[",\n]/.test(text) ? `"${text.replace(/"/g, "\"\"")}"` : text;
 }
