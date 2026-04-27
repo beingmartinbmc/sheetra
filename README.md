@@ -1,8 +1,27 @@
 # Sheetra
 
-Sheetra is a production-grade spreadsheet pipeline library for Node.js. It is built around typed ingestion, streaming-friendly row transforms, validation, cleaning, query, diffing, formula helpers, and benchmark transparency.
+Sheetra is a streaming-first spreadsheet pipeline library for Node.js.
 
-The goal is not to clone SheetJS or ExcelJS. Sheetra treats Excel and CSV files as data contracts and processing pipelines:
+It is designed for large, messy, real-world Excel and CSV files, where correctness, memory stability, and data validation matter more than just reading cells.
+
+Unlike SheetJS or ExcelJS, Sheetra treats spreadsheets as:
+
+**data contracts + processing pipelines**
+
+## Why Sheetra
+
+Most Node.js Excel libraries focus on file manipulation.
+
+Sheetra focuses on data ingestion and transformation:
+
+- Typed schemas instead of loose objects.
+- Streaming pipelines instead of in-memory loading.
+- Validation and cleaning built in.
+- Predictable memory usage on large files.
+
+The goal: make Excel safe for backend systems.
+
+## Example
 
 ```ts
 import { read, schema } from "sheetra";
@@ -24,79 +43,122 @@ const rows = await read("leads.xlsx")
   .collect();
 ```
 
-## What Works Now
+## Core Capabilities
 
-- TypeScript-first package with ESM exports and declarations.
-- AsyncIterable pipeline API: `read().map().filter().clean().schema().write()`.
-- CSV read/write support through Node streams, including a raw fast path and `drain()` for counting/processing without collecting rows.
-- XLSX read/write support for row data, multi-sheet workbooks, formula preservation, merges, validations, tables, frozen panes, and metadata primitives.
-- Schema validation with TypeScript inference, coercion, fuzzy headers, dedupe cleaning, detailed parse results, and structured validation issues.
-- Formula helper for common functions such as `SUM`, `AVERAGE`, `IF`, and custom functions.
-- SQL-like `SELECT ... WHERE ... ORDER BY ... LIMIT ...` querying, indexes, joins, and row diffing.
-- Plugin registry for validators, exporters, parsers, and formula functions.
-- CSV issue reports, diff reports, worker-thread mapping, and reproducible benchmark entrypoints.
+### Streaming-First Pipelines
 
-## Roadmap
+- AsyncIterable API: `read().map().filter().clean().schema().write()`.
+- Backpressure-aware processing.
+- Constant-memory CSV pipelines.
 
-Sheetra is being developed in phases:
+### Type-Safe Ingestion
 
-1. Foundation: package, tests, build, linting, API, fixtures, and benchmarks.
-2. Fast streaming core: constant-memory XLSX/CSV row pipelines and backpressure-aware writers.
-3. Type-safe ingestion: schemas, cleaning, diagnostics, and partial recovery.
-4. Feature parity: workbook model, formulas, styles, merged cells, validations, hyperlinks, comments, tables, panes, metadata, and images.
-5. Differentiators: formula evaluation, SQL, diffing, worker parallelism, plugins, and performance telemetry.
-6. Benchmark proof: reproducible performance comparisons before making speed claims.
+- Schema validation with TypeScript inference.
+- Coercion, optional fields, and structured errors.
+- Fail-fast or partial recovery modes.
 
-## Scripts
+### Data Cleaning & Normalization
 
-```sh
-npm run build
-npm test
-npm run lint
-npm run benchmark
-npm run benchmark:compare
-npm run benchmark:files
-```
+- Trim, whitespace normalization, and deduplication.
+- Fuzzy header matching.
+- Built-in validation helpers for email, number, date, and more.
+
+### XLSX + CSV Support
+
+- CSV: streaming read/write with raw fast path and `drain()`.
+- XLSX: multi-sheet workbooks, preserved formulas, merges, tables, panes, and metadata.
+
+### Query, Diffing, and Transformations
+
+- SQL-like queries: `SELECT`, `WHERE`, `ORDER BY`, `LIMIT`.
+- Indexing and joins.
+- Row-level diffing.
+
+### Extensibility
+
+Plugin system for:
+
+- Validators.
+- Parsers.
+- Exporters.
+- Formula functions.
+
+### Performance & Observability
+
+- Worker-thread mapping.
+- Benchmark scripts checked into the repo.
+- Memory tracking and timeline sampling.
+
+## Positioning
+
+Sheetra does not aim to be:
+
+- The fastest raw parser.
+- A full Excel styling engine.
+
+Instead, it focuses on:
+
+**reliable, memory-stable data pipelines for large spreadsheet workloads.**
 
 ## Benchmarks
 
-Benchmarks are intentionally checked in as scripts, not marketing claims. Run them on your own machine with representative files before choosing Sheetra for a workload. The strongest suite is `npm run benchmark:strong`, which is designed to answer whether Sheetra survives messy, large, production-style files.
+Benchmarks are included as runnable scripts, not marketing claims.
 
-Local environment for the numbers below:
+Run them locally with your own data:
 
-- macOS Darwin 25.4.0
-- Node.js package scripts from this repository
-- `SHEETRA_BENCH_ROWS=100000`
-- Local fixtures in `benchmark/files`
+```sh
+npm run benchmark:strong
+```
 
-Synthetic 100k-row write/transform benchmark:
+This suite answers a practical question:
 
-| Engine | Rows | Time | Peak memory |
+**Will Sheetra survive large, messy, production-style files?**
+
+### Environment
+
+- macOS Darwin 25.4.0.
+- Node.js.
+- `SHEETRA_BENCH_ROWS=100000`.
+- Local fixtures in `benchmark/files`.
+
+### Synthetic, 100k Rows
+
+| Engine | Time | Peak Memory |
+| --- | ---: | ---: |
+| `sheetra:csv:pipeline` | 206ms | 153MB |
+| `sheetjs:xlsx:json_to_sheet` | 314ms | 308MB |
+| `exceljs:workbook:csv` | 139ms | 446MB |
+
+### Real File, 1M Rows, 244MB CSV
+
+| Engine | Time | Peak Memory |
+| --- | ---: | ---: |
+| `sheetra:csv:stream` | 11.5s | 123MB |
+| `fast-csv:stream` | 7.8s | 128MB |
+
+Sheetra is not the fastest raw parser, but it maintains stable, low memory usage on large files.
+
+### XLSX, Current State
+
+| Engine | Rows | Time | Peak Memory |
 | --- | ---: | ---: | ---: |
-| `sheetra:csv:pipeline` | 100,000 | 206ms | 153.1MB |
-| `sheetjs:xlsx:json_to_sheet` | 100,000 | 314ms | 308.2MB |
-| `exceljs:workbook:csv` | 100,000 | 139ms | 446.7MB |
+| `sheetra:xlsx` | 35,808 | 1.06s | 491MB |
+| `sheetjs:xlsx:readFile` | 35,808 | 334ms | 579MB |
 
-Real local file benchmark:
+XLSX support is functional and feature-rich, but not yet optimized for performance.
 
-| File | Engine | Rows | Time | Peak memory |
-| --- | --- | ---: | ---: | ---: |
-| CSV fixture, 1,004,894 rows, 243.6MB | `sheetra:csv:stream` | 1,004,894 | 11,577ms | 123.9MB |
-| CSV fixture, 1,004,894 rows, 243.6MB | `fast-csv:stream` | 1,004,894 | 7,851ms | 128.1MB |
-| CSV fixture, 1,000 rows, 497.6KB | `sheetra:csv:stream` | 1,000 | 25ms | 129.1MB |
-| CSV fixture, 1,000 rows, 497.6KB | `sheetjs:xlsx:readFile` | 1,000 | 100ms | 152.0MB |
-| XLSX fixture, 1,000 rows, 244.2KB | `sheetra:xlsx` | 1,000 | 143ms | 189.8MB |
-| XLSX fixture, 1,000 rows, 244.2KB | `sheetjs:xlsx:readFile` | 1,000 | 72ms | 196.6MB |
-| XLSX fixture, 35,808 rows, 1.5MB | `sheetra:xlsx` | 35,808 | 1,060ms | 491.0MB |
-| XLSX fixture, 35,808 rows, 1.5MB | `sheetjs:xlsx:readFile` | 35,808 | 334ms | 579.8MB |
+### Interpretation
 
-Current interpretation:
+- CSV: production-ready, streaming, memory-stable.
+- XLSX: functional and feature-rich, optimization in progress.
+- fast-csv: faster as a raw parser.
+- SheetJS: faster for XLSX today.
 
-- Sheetra’s CSV path is already memory-stable on a 244MB / 1M-row file, but `fast-csv` is still faster as a raw CSV parser.
-- Sheetra’s XLSX path is feature-oriented but not yet optimized; SheetJS is faster on the tested XLSX fixtures.
-- The next performance milestone is a true streaming XLSX reader and a lower-overhead CSV pipeline.
+Sheetra’s advantage is:
 
-Benchmark controls:
+**predictable memory usage + composable data pipelines.**
+
+### Benchmark Controls
 
 ```sh
 SHEETRA_BENCH_ROWS=100000 npm run benchmark:compare
@@ -107,19 +169,55 @@ SHEETRA_BENCH_PROFILE=full npm run benchmark:strong
 SHEETRA_BENCH_SCALES=100000,500000,1000000,2000000 npm run benchmark:strong
 ```
 
-The strong suite covers:
+### What the Full Suite Covers
 
-- Scale runs from 100k through 2M+ rows.
-- Streaming vs in-memory modes for Sheetra, ExcelJS, SheetJS, and fast-csv.
-- Sheetra raw mode and feature-enabled mode: `inferTypes`, schema validation, cleaning, and issue collection are benchmarked separately from the raw streaming fast path.
-- XLSX read paths, multi-sheet workbooks, and formula-preserving files.
-- Tall data, wide data, light transforms, heavy transforms, and full read-validate-transform-write pipelines.
-- Fault tolerance with messy rows, invalid types, missing values, and issue collection.
-- Worker-thread scaling, cold/warm runs, local file-size fixtures, GC time, and memory samples over time.
+- Scale: 100k to 2M+ rows.
+- Streaming vs in-memory comparisons.
+- CSV raw mode vs feature-enabled pipelines.
+- XLSX multi-sheet and formula-preserving reads.
+- Tall vs wide datasets.
+- Light vs heavy transformations.
+- End-to-end pipelines: read, validate, transform, write.
+- Fault tolerance: invalid rows, missing values, type errors.
+- Worker-thread scaling.
+- Cold vs warm runs.
+- GC time and memory timelines.
 
-The suite writes detailed JSON and Markdown artifacts to `benchmark/results/`, including sampled memory timelines. Those generated artifacts are ignored by git so local large-run evidence stays local unless explicitly published.
+Artifacts are written to:
 
-CSV performance note: Sheetra keeps CSV values as raw strings by default, matching the lower-overhead behavior expected from stream-first parsers. Use `read(file, { inferTypes: true })` for primitive inference, or prefer `schema(...)` for typed ingestion with explicit validation and coercion.
+```text
+benchmark/results/
+```
+
+## CSV Behavior
+
+By default, CSV values are treated as raw strings for performance.
+
+Options:
+
+- `inferTypes: true`: automatic primitive inference.
+- `schema(...)`: explicit typing and validation, recommended for backend ingestion.
+
+## Roadmap
+
+1. Foundation: API, tests, benchmarks.
+2. Fast streaming core: constant-memory pipelines.
+3. Type-safe ingestion: schemas, diagnostics.
+4. Feature parity: XLSX model, formulas, metadata.
+5. Differentiators: SQL, diffing, plugins, parallelism.
+6. Benchmark proof: reproducible performance claims.
+
+## Scripts
+
+```sh
+npm run build
+npm test
+npm run lint
+npm run benchmark
+npm run benchmark:compare
+npm run benchmark:files
+npm run benchmark:strong
+```
 
 ## License
 
