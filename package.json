@@ -26,6 +26,7 @@
     "benchmark": "tsx benchmark/streaming.ts",
     "benchmark:compare": "tsx benchmark/compare.ts",
     "benchmark:files": "tsx benchmark/files.ts",
+    "benchmark:isolated": "tsx benchmark/isolated/index.ts",
     "benchmark:strong": "tsx benchmark/strong.ts",
     "prepublishOnly": "npm run lint && npm run typecheck && npm test && npm run build"
   },
