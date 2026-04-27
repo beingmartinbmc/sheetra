@@ -4,6 +4,8 @@ coverage/
 .idea/
 benchmark/files/*
 !benchmark/files/README.md
+benchmark/results/*
+!benchmark/results/README.md
 .DS_Store
 *.log
 .env
