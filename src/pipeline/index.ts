@@ -1,7 +1,7 @@
 import { collectCsvViaEvents, drainCsvViaEvents, readCsv, writeCsv } from "../csv/index.js";
 import { finishStats, createStats, observeMemory } from "../perf/index.js";
-import { cleanRow, type InferSchema, type SchemaDefinition, SheetraValidationError, validateRow } from "../schema/index.js";
-import type { ProcessResult, ProcessStats, ReadOptions, Row, RowLike, SheetraIssue, WriteOptions } from "../types.js";
+import { cleanRow, type InferSchema, type SchemaDefinition, PravaahValidationError, validateRow } from "../schema/index.js";
+import type { ProcessResult, ProcessStats, ReadOptions, Row, RowLike, PravaahIssue, WriteOptions } from "../types.js";
 import { readXlsx, writeXlsx } from "../xlsx/index.js";
 
 const MEMORY_SAMPLE_INTERVAL_ROWS = 4096;
@@ -15,7 +15,7 @@ type FusedOp<T, U> =
   | { kind: "map"; fn: (row: T, index: number) => U | Promise<U> }
   | { kind: "filter"; fn: (row: T, index: number) => boolean | Promise<boolean> };
 
-export class SheetraPipeline<T = Row> implements AsyncIterable<T> {
+export class PravaahPipeline<T = Row> implements AsyncIterable<T> {
   private readonly pendingOps: FusedOp<unknown, unknown>[] = [];
 
   constructor(
@@ -57,34 +57,34 @@ export class SheetraPipeline<T = Row> implements AsyncIterable<T> {
     };
   }
 
-  map<U>(mapper: (row: T, index: number) => U | Promise<U>): SheetraPipeline<U> {
-    const next = new SheetraPipeline<U>(this.source as unknown as () => AsyncIterable<U>);
+  map<U>(mapper: (row: T, index: number) => U | Promise<U>): PravaahPipeline<U> {
+    const next = new PravaahPipeline<U>(this.source as unknown as () => AsyncIterable<U>);
     next.pendingOps.push(...this.pendingOps);
     next.pendingOps.push({ kind: "map", fn: mapper as unknown as (row: unknown, index: number) => unknown });
     return next;
   }
 
-  filter(predicate: (row: T, index: number) => boolean | Promise<boolean>): SheetraPipeline<T> {
-    const next = new SheetraPipeline<T>(this.source);
+  filter(predicate: (row: T, index: number) => boolean | Promise<boolean>): PravaahPipeline<T> {
+    const next = new PravaahPipeline<T>(this.source);
     next.pendingOps.push(...this.pendingOps);
     next.pendingOps.push({ kind: "filter", fn: predicate as unknown as (row: unknown, index: number) => boolean | Promise<boolean> });
     return next;
   }
 
-  clean(options: NonNullable<ReadOptions["cleaning"]>): SheetraPipeline<T> {
+  clean(options: NonNullable<ReadOptions["cleaning"]>): PravaahPipeline<T> {
     return this.map((row) => (isRow(row) ? cleanRow(row, options) : row) as T);
   }
 
   schema<S extends SchemaDefinition>(
     definition: S,
     options: Pick<ReadOptions, "validation" | "cleaning"> = {},
-  ): SheetraPipeline<InferSchema<S>> {
+  ): PravaahPipeline<InferSchema<S>> {
     const iterate = () => this.buildIterator();
-    return new SheetraPipeline(async function* () {
+    return new PravaahPipeline(async function* () {
       let rowNumber = 1;
       for await (const row of iterate()) {
         if (!isRow(row)) {
-          throw new SheetraValidationError([
+          throw new PravaahValidationError([
             {
               code: "array_row",
               message: "Schema validation expects object rows with named columns",
@@ -99,7 +99,7 @@ export class SheetraPipeline<T = Row> implements AsyncIterable<T> {
         if (result.value !== undefined) {
           yield result.value;
         } else if (options.validation === "fail-fast") {
-          throw new SheetraValidationError(result.issues);
+          throw new PravaahValidationError(result.issues);
         } else if (options.validation !== "skip") {
           for (const issue of result.issues) process.emitWarning(issue.message, { code: issue.code });
         }
@@ -108,9 +108,9 @@ export class SheetraPipeline<T = Row> implements AsyncIterable<T> {
     });
   }
 
-  take(limit: number): SheetraPipeline<T> {
+  take(limit: number): PravaahPipeline<T> {
     const iterate = () => this.buildIterator();
-    return new SheetraPipeline(async function* () {
+    return new PravaahPipeline(async function* () {
       let count = 0;
       for await (const row of iterate()) {
         if (count >= limit) break;
@@ -130,7 +130,7 @@ export class SheetraPipeline<T = Row> implements AsyncIterable<T> {
   async process(): Promise<ProcessResult<T>> {
     const stats = createStats();
     const rows: T[] = [];
-    const issues: SheetraIssue[] = [];
+    const issues: PravaahIssue[] = [];
 
     try {
       for await (const row of this) {
@@ -139,7 +139,7 @@ export class SheetraPipeline<T = Row> implements AsyncIterable<T> {
         observeMemoryPeriodically(stats);
       }
     } catch (error) {
-      if (error instanceof SheetraValidationError) {
+      if (error instanceof PravaahValidationError) {
         issues.push(...error.issues);
         stats.errors += error.issues.length;
       } else {
@@ -161,7 +161,7 @@ export class SheetraPipeline<T = Row> implements AsyncIterable<T> {
         observeMemoryPeriodically(stats);
       }
     } catch (error) {
-      if (error instanceof SheetraValidationError) {
+      if (error instanceof PravaahValidationError) {
         stats.errors += error.issues.length;
       } else {
         throw error;
@@ -179,23 +179,23 @@ export class SheetraPipeline<T = Row> implements AsyncIterable<T> {
 export function read(
   source: string | Buffer | AsyncIterable<RowLike> | Iterable<RowLike>,
   options: ReadOptions = {},
-): SheetraPipeline<RowLike> {
+): PravaahPipeline<RowLike> {
   if (isIterableSource(source)) {
-    return new SheetraPipeline(async function* () {
+    return new PravaahPipeline(async function* () {
       yield* source;
     });
   }
 
   const format = options.format ?? inferFormat(typeof source === "string" ? source : undefined);
   if (format === "csv") {
-    return new SheetraPipeline(() => readCsv(source, options), {
+    return new PravaahPipeline(() => readCsv(source, options), {
       drain: () => drainCsvViaEvents(source, options),
       collect: () => collectCsvViaEvents(source, options) as Promise<RowLike[]>,
     });
   }
-  if (format === "xlsx") return new SheetraPipeline(() => readXlsx(source, options));
+  if (format === "xlsx") return new PravaahPipeline(() => readXlsx(source, options));
   if (format === "json") {
-    return new SheetraPipeline(async function* () {
+    return new PravaahPipeline(async function* () {
       const text = Buffer.isBuffer(source)
         ? source.toString("utf8")
         : await import("node:fs/promises").then((fs) => fs.readFile(source, "utf8"));
@@ -242,12 +242,12 @@ export async function parseDetailed<S extends SchemaDefinition>(
 ): Promise<ProcessResult<InferSchema<S>>> {
   const stats = createStats();
   const rows: InferSchema<S>[] = [];
-  const issues: SheetraIssue[] = [];
+  const issues: PravaahIssue[] = [];
   let rowNumber = 1;
 
   for await (const row of read(source, options)) {
     if (!isRow(row)) {
-      const issue: SheetraIssue = {
+      const issue: PravaahIssue = {
         code: "array_row",
         message: "Schema validation expects object rows with named columns",
         rowNumber,
@@ -255,7 +255,7 @@ export async function parseDetailed<S extends SchemaDefinition>(
       };
       issues.push(issue);
       stats.errors += 1;
-      if (options.validation === "fail-fast") throw new SheetraValidationError([issue]);
+      if (options.validation === "fail-fast") throw new PravaahValidationError([issue]);
       rowNumber += 1;
       continue;
     }
@@ -270,7 +270,7 @@ export async function parseDetailed<S extends SchemaDefinition>(
     } else {
       issues.push(...result.issues);
       stats.errors += result.issues.length;
-      if (options.validation === "fail-fast") throw new SheetraValidationError(result.issues);
+      if (options.validation === "fail-fast") throw new PravaahValidationError(result.issues);
     }
 
     rowNumber += 1;

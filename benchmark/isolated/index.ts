@@ -16,12 +16,12 @@ interface IsolatedResult {
 
 const here = dirname(fileURLToPath(import.meta.url));
 const fixtureDir = join(process.cwd(), "benchmark", "files");
-const runs = Number(process.env.SHEETRA_BENCH_RUNS ?? 2);
-const includeMemoryHeavyDefault = process.env.SHEETRA_BENCH_INCLUDE_MEMORY === "1";
-const memoryHeavyLimitBytes = Number(process.env.SHEETRA_BENCH_MEMORY_LIMIT_MB ?? 100) * 1024 * 1024;
-const writeRows = Number(process.env.SHEETRA_BENCH_WRITE_ROWS ?? 100000);
-const skipWrite = process.env.SHEETRA_BENCH_SKIP_WRITE === "1";
-const skipRead = process.env.SHEETRA_BENCH_SKIP_READ === "1";
+const runs = Number(process.env.PRAVAAH_BENCH_RUNS ?? 2);
+const includeMemoryHeavyDefault = process.env.PRAVAAH_BENCH_INCLUDE_MEMORY === "1";
+const memoryHeavyLimitBytes = Number(process.env.PRAVAAH_BENCH_MEMORY_LIMIT_MB ?? 100) * 1024 * 1024;
+const writeRows = Number(process.env.PRAVAAH_BENCH_WRITE_ROWS ?? 100000);
+const skipWrite = process.env.PRAVAAH_BENCH_SKIP_WRITE === "1";
+const skipRead = process.env.PRAVAAH_BENCH_SKIP_READ === "1";
 
 const aggregated: IsolatedResult[] = [];
 
@@ -42,7 +42,7 @@ if (!skipRead) {
           engine: engine.name,
           timeMs: "skipped",
           peakRss: "skipped",
-          notes: `set SHEETRA_BENCH_INCLUDE_MEMORY=1 to run files over ${formatBytes(memoryHeavyLimitBytes)}`,
+          notes: `set PRAVAAH_BENCH_INCLUDE_MEMORY=1 to run files over ${formatBytes(memoryHeavyLimitBytes)}`,
         });
         continue;
       }
@@ -118,7 +118,7 @@ function readWorkloadLabel(extension: string): string {
 }
 
 async function discoverFiles(): Promise<string[]> {
-  const selectedFile = process.env.SHEETRA_BENCH_FILE;
+  const selectedFile = process.env.PRAVAAH_BENCH_FILE;
   let entries: string[];
   try {
     entries = await readdir(fixtureDir);
@@ -144,21 +144,21 @@ interface WriteEngineSpec {
 function readEnginesFor(extension: string): EngineSpec[] {
   if (extension === ".csv") {
     return [
-      { name: "sheetra-raw-drain" },
-      { name: "sheetra-row-parse" },
+      { name: "pravaah-raw-drain" },
+      { name: "pravaah-row-parse" },
       { name: "fastcsv" },
       { name: "sheetjs", heavy: true },
     ];
   }
-  return [{ name: "sheetra" }, { name: "sheetjs" }, { name: "exceljs" }];
+  return [{ name: "pravaah" }, { name: "sheetjs" }, { name: "exceljs" }];
 }
 
 function writeEngineSpecs(): WriteEngineSpec[] {
   return [
-    { name: "sheetra-write-csv", workload: "CSV Write" },
+    { name: "pravaah-write-csv", workload: "CSV Write" },
     { name: "fastcsv-write", workload: "CSV Write" },
     { name: "sheetjs-write-csv", workload: "CSV Write" },
-    { name: "sheetra-write-xlsx", workload: "XLSX Write" },
+    { name: "pravaah-write-xlsx", workload: "XLSX Write" },
     { name: "sheetjs-write-xlsx", workload: "XLSX Write" },
     { name: "exceljs-write-xlsx", workload: "XLSX Write" },
   ];
@@ -188,7 +188,7 @@ async function runMultipleWrite(
   const samples: Array<{ timeMs: number; peakRssBytes: number; rows: number }> = [];
   for (let i = 0; i < count; i++) {
     try {
-      samples.push(await runIsolated("__write__", engine, { SHEETRA_BENCH_WRITE_ROWS: String(rowCount) }));
+      samples.push(await runIsolated("__write__", engine, { PRAVAAH_BENCH_WRITE_ROWS: String(rowCount) }));
     } catch {
       break;
     }

@@ -1,5 +1,5 @@
 {
-  "name": "sheetra",
+  "name": "pravaah",
   "version": "0.1.0",
   "description": "Production-grade Excel and CSV pipelines for Node.js.",
   "type": "module",
@@ -42,6 +42,14 @@
   ],
   "author": "",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/beingmartinbmc/pravaah.git"
+  },
+  "bugs": {
+    "url": "https://github.com/beingmartinbmc/pravaah/issues"
+  },
+  "homepage": "https://github.com/beingmartinbmc/pravaah#readme",
   "engines": {
     "node": ">=20"
   },
