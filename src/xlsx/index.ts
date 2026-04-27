@@ -175,14 +175,22 @@ export function formula(formula: string, result?: unknown, style?: CellStyle): F
 function readSharedStrings(files: Record<string, Uint8Array>): string[] {
   const file = files["xl/sharedStrings.xml"];
   if (file === undefined) return [];
-  const doc = parser.parse(strFromU8(file)) as SharedStringsDoc;
-  return arrayify(doc.sst.si).map((entry) => {
-    if (typeof entry.t === "string") return entry.t;
-    if (entry.t?.text !== undefined) return entry.t.text;
-    return arrayify(entry.r)
-      .map((run) => (typeof run.t === "string" ? run.t : run.t?.text ?? ""))
-      .join("");
-  });
+  const xml = strFromU8(file);
+  const strings: string[] = [];
+  let cursor = 0;
+
+  while (cursor < xml.length) {
+    const start = xml.indexOf("<si", cursor);
+    if (start === -1) break;
+    const openEnd = xml.indexOf(">", start);
+    if (openEnd === -1) break;
+    const end = xml.indexOf("</si>", openEnd);
+    if (end === -1) break;
+    strings.push(inlineStringText(xml.slice(openEnd + 1, end)) ?? "");
+    cursor = end + 5;
+  }
+
+  return strings;
 }
 
 function workbookSheets(files: Record<string, Uint8Array>): Array<{ name: string; path: string }> {
@@ -218,68 +226,168 @@ function readWorksheetRows(xml: string, sharedStrings: string[], options: ReadOp
 }
 
 function* iterateWorksheetRows(xml: string, sharedStrings: string[], options: ReadOptions): Iterable<Row> {
-  const doc = parser.parse(xml) as WorksheetDoc;
-  const rows = arrayify(doc.worksheet.sheetData?.row);
-  if (rows.length === 0) return;
-
   const useArrayHeaders = Array.isArray(options.headers) && options.headers.length > 0;
   const headerless = options.headers === false;
-  const headers = useArrayHeaders
-    ? (options.headers as string[])
-    : headerless
-      ? []
-      : readHeaderRow(rows[0]!, sharedStrings, options);
+  let headers = useArrayHeaders ? (options.headers as string[]) : undefined;
 
-  const startIndex = headerless || useArrayHeaders ? 0 : 1;
-  for (let r = startIndex; r < rows.length; r += 1) {
-    const row = rows[r]!;
-    const cells = arrayify(row.c);
-    const headerCount = headers.length;
+  for (const values of iterateWorksheetValueRows(xml, sharedStrings, options)) {
+    if (headers === undefined && !headerless) {
+      headers = new Array(values.length);
+      for (let index = 0; index < values.length; index += 1) headers[index] = String(values[index] ?? `_${index + 1}`);
+      continue;
+    }
+
     const obj: Row = {};
-    if (headerCount > 0) {
-      for (let i = 0; i < headerCount; i += 1) {
-        const header = headers[i]!;
-        const cell = cells[i];
-        obj[header] = cell === undefined ? null : decodeCell(cell, sharedStrings, options);
+    if (headerless) {
+      for (let index = 0; index < values.length; index += 1) {
+        if (values[index] !== undefined) obj[`_${index + 1}`] = values[index] ?? null;
       }
     } else {
-      for (let i = 0; i < cells.length; i += 1) {
-        obj[`_${i + 1}`] = decodeCell(cells[i]!, sharedStrings, options);
+      const resolvedHeaders = headers ?? [];
+      for (let index = 0; index < resolvedHeaders.length; index += 1) {
+        obj[resolvedHeaders[index]!] = values[index] ?? null;
       }
     }
     yield obj;
   }
 }
 
-function readHeaderRow(row: WorksheetRow, sharedStrings: string[], options: ReadOptions): string[] {
-  const cells = arrayify(row.c);
-  const headers: string[] = new Array(cells.length);
-  for (let i = 0; i < cells.length; i += 1) {
-    const value = decodeCell(cells[i]!, sharedStrings, options);
-    headers[i] = String(value ?? `_${i + 1}`);
+function* iterateWorksheetValueRows(xml: string, sharedStrings: string[], options: ReadOptions): Iterable<CellValue[]> {
+  const sheetDataStart = xml.indexOf("<sheetData");
+  if (sheetDataStart === -1) return;
+
+  const sheetDataOpenEnd = xml.indexOf(">", sheetDataStart);
+  const sheetDataEnd = xml.indexOf("</sheetData>", sheetDataOpenEnd);
+  if (sheetDataOpenEnd === -1 || sheetDataEnd === -1) return;
+
+  let cursor = sheetDataOpenEnd + 1;
+  while (cursor < sheetDataEnd) {
+    const rowStart = xml.indexOf("<row", cursor);
+    if (rowStart === -1 || rowStart >= sheetDataEnd) return;
+
+    const rowOpenEnd = xml.indexOf(">", rowStart);
+    if (rowOpenEnd === -1) return;
+
+    const rowTag = xml.slice(rowStart, rowOpenEnd + 1);
+    if (rowTag.endsWith("/>")) {
+      cursor = rowOpenEnd + 1;
+      yield [];
+      continue;
+    }
+
+    const rowEnd = xml.indexOf("</row>", rowOpenEnd);
+    if (rowEnd === -1) return;
+
+    yield readWorksheetValueRow(xml.slice(rowOpenEnd + 1, rowEnd), sharedStrings, options);
+    cursor = rowEnd + 6;
   }
-  return headers;
 }
 
-function decodeCell(cell: WorksheetCell, sharedStrings: string[], options: ReadOptions): CellValue {
-  const formulaText = typeof cell.f === "string" ? cell.f : cell.f?.text;
+function readWorksheetValueRow(rowXml: string, sharedStrings: string[], options: ReadOptions): CellValue[] {
+  const values: CellValue[] = [];
+  let cursor = 0;
+  let implicitColumn = 0;
+
+  while (cursor < rowXml.length) {
+    const cellStart = rowXml.indexOf("<c", cursor);
+    if (cellStart === -1) break;
+
+    const cellOpenEnd = rowXml.indexOf(">", cellStart);
+    if (cellOpenEnd === -1) break;
+
+    const openTag = rowXml.slice(cellStart, cellOpenEnd + 1);
+    const attrs = parseCellAttributes(openTag);
+    const ref = attrs.r;
+    const columnIndex = ref === undefined ? implicitColumn : cellRefToColumnIndex(ref);
+    implicitColumn = columnIndex + 1;
+
+    if (openTag.endsWith("/>")) {
+      values[columnIndex] = null;
+      cursor = cellOpenEnd + 1;
+      continue;
+    }
+
+    const cellEnd = rowXml.indexOf("</c>", cellOpenEnd);
+    if (cellEnd === -1) break;
+
+    values[columnIndex] = decodeCellXml(attrs, rowXml.slice(cellOpenEnd + 1, cellEnd), sharedStrings, options);
+    cursor = cellEnd + 4;
+  }
+  return values;
+}
+
+interface CellAttributes {
+  r?: string | undefined;
+  t?: string | undefined;
+}
+
+function decodeCellXml(attrs: CellAttributes, innerXml: string, sharedStrings: string[], options: ReadOptions): CellValue {
+  const formulaText = firstTagText(innerXml, "f");
   if (formulaText !== undefined && options.formulas === "preserve") {
-    const valueCell: WorksheetCell = { ...cell };
-    delete valueCell.f;
     return formula(
       formulaText.startsWith("=") ? formulaText.slice(1) : formulaText,
-      decodeCell(valueCell, sharedStrings, { ...options, formulas: "values" }),
+      decodeCellXml(attrs, innerXml, sharedStrings, { ...options, formulas: "values" }),
     );
   }
-  if (cell.t === "s") return sharedStrings[Number(cell.v)] ?? null;
-  if (cell.t === "inlineStr") {
-    const text = cell.is?.t;
-    return typeof text === "string" ? text : text?.text ?? null;
+  if (attrs.t === "s") return sharedStrings[Number(firstTagText(innerXml, "v"))] ?? null;
+  if (attrs.t === "inlineStr") return inlineStringText(innerXml);
+  if (attrs.t === "b") return firstTagText(innerXml, "v") === "1";
+
+  const rawValue = firstTagText(innerXml, "v");
+  if (rawValue === undefined) return null;
+  const number = Number(rawValue);
+  return Number.isFinite(number) ? number : rawValue;
+}
+
+function parseCellAttributes(tag: string): CellAttributes {
+  const attrs: CellAttributes = {};
+  const ref = readXmlAttribute(tag, "r");
+  const type = readXmlAttribute(tag, "t");
+  if (ref !== undefined) attrs.r = ref;
+  if (type !== undefined) attrs.t = type;
+  return attrs;
+}
+
+function readXmlAttribute(tag: string, name: string): string | undefined {
+  const marker = `${name}=`;
+  const markerIndex = tag.indexOf(marker);
+  if (markerIndex === -1) return undefined;
+
+  const quoteIndex = markerIndex + marker.length;
+  const quote = tag[quoteIndex];
+  if (quote !== "\"" && quote !== "'") return undefined;
+
+  const valueStart = quoteIndex + 1;
+  const valueEnd = tag.indexOf(quote, valueStart);
+  return valueEnd === -1 ? undefined : unescapeXml(tag.slice(valueStart, valueEnd));
+}
+
+function firstTagText(xml: string, tag: string): string | undefined {
+  const start = xml.indexOf(`<${tag}`);
+  if (start === -1) return undefined;
+  const openEnd = xml.indexOf(">", start);
+  if (openEnd === -1) return undefined;
+  const end = xml.indexOf(`</${tag}>`, openEnd);
+  return end === -1 ? undefined : unescapeXml(xml.slice(openEnd + 1, end));
+}
+
+function inlineStringText(xml: string): string | null {
+  const texts: string[] = [];
+  const regex = /<t\b[^>]*>([\s\S]*?)<\/t>/g;
+  let match: RegExpExecArray | null;
+  while ((match = regex.exec(xml)) !== null) texts.push(unescapeXml(match[1]!));
+  return texts.length === 0 ? null : texts.join("");
+}
+
+function cellRefToColumnIndex(ref: string): number {
+  let index = 0;
+  for (let offset = 0; offset < ref.length; offset += 1) {
+    const code = ref.charCodeAt(offset);
+    if (code >= 65 && code <= 90) index = index * 26 + code - 64;
+    else if (code >= 97 && code <= 122) index = index * 26 + code - 96;
+    else break;
   }
-  if (cell.t === "b") return cell.v === "1";
-  if (cell.v === undefined) return null;
-  const number = Number(cell.v);
-  return Number.isFinite(number) ? number : cell.v;
+  return Math.max(0, index - 1);
 }
 
 function rowToObject(row: RowLike, headers: string[]): Row {
@@ -405,6 +513,17 @@ function escapeXml(value: string): string {
     .replace(/"/g, "&quot;");
 }
 
+function unescapeXml(value: string): string {
+  return value
+    .replace(/&#x([0-9a-fA-F]+);/g, (_match, hex: string) => String.fromCodePoint(Number.parseInt(hex, 16)))
+    .replace(/&#(\d+);/g, (_match, decimal: string) => String.fromCodePoint(Number.parseInt(decimal, 10)))
+    .replace(/&quot;/g, "\"")
+    .replace(/&apos;/g, "'")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&amp;/g, "&");
+}
+
 function contentTypesXml(sheets: Worksheet[]): string {
   const worksheetOverrides = sheets
     .map(
@@ -486,33 +605,6 @@ function coreXml(properties: Record<string, string> = {}): string {
 <cp:coreProperties xmlns:cp="http://schemas.openxmlformats.org/package/2006/metadata/core-properties" xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:dcterms="http://purl.org/dc/terms/">
   <dc:creator>${escapeXml(creator)}</dc:creator><dcterms:created>${properties.created ?? new Date().toISOString()}</dcterms:created>
 </cp:coreProperties>`;
-}
-
-interface SharedStringsDoc {
-  sst: {
-    si: Array<{ t?: string | { text: string }; r?: Array<{ t?: string | { text: string } }> }>;
-  };
-}
-
-interface WorksheetDoc {
-  worksheet: {
-    sheetData?: {
-      row?: WorksheetRow | WorksheetRow[];
-    };
-  };
-}
-
-interface WorksheetRow {
-  c?: WorksheetCell | WorksheetCell[];
-}
-
-interface WorksheetCell {
-  t?: string;
-  v?: string;
-  f?: string | { text: string };
-  is?: {
-    t?: string | { text: string };
-  };
 }
 
 interface WorkbookDoc {
