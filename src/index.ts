@@ -1,4 +1,4 @@
-export { read, write, parse, parseDetailed, SheetraPipeline } from "./pipeline/index.js";
+export { read, write, parse, parseDetailed, PravaahPipeline } from "./pipeline/index.js";
 export { readCsv, writeCsv, inferCsv } from "./csv/index.js";
 export { readXlsx, writeXlsx, readWorkbook, writeWorkbook, workbook, worksheet, cell, formula } from "./xlsx/index.js";
 export {
@@ -9,7 +9,7 @@ export {
   cleanRows,
   normalizeHeader,
   writeIssueReport,
-  SheetraValidationError,
+  PravaahValidationError,
 } from "./schema/index.js";
 export { FormulaEngine, evaluateFormula } from "./formula/index.js";
 export { query, createIndex, joinRows } from "./query/index.js";

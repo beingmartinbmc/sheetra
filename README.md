@@ -1,11 +1,11 @@
-# Sheetra
+# Pravaah
 
 Production-grade Excel, CSV, and JSON pipelines for Node.js.
 
-Sheetra turns spreadsheets into typed, validated, streaming data pipelines. It is built for backend import jobs, ETL flows, customer uploads, audits, and data products where spreadsheet files are large, messy, and business-critical.
+Pravaah turns spreadsheets into typed, validated, streaming data pipelines. It is built for backend import jobs, ETL flows, customer uploads, audits, and data products where spreadsheet files are large, messy, and business-critical.
 
 ```ts
-import { read, schema } from "sheetra";
+import { read, schema } from "pravaah";
 
 const leads = await read("leads.xlsx")
   .clean({
@@ -26,11 +26,11 @@ const leads = await read("leads.xlsx")
   .collect();
 ```
 
-## Why Sheetra
+## Why Pravaah
 
 Most Node.js spreadsheet libraries are file manipulation libraries. They help you read cells or write workbooks, but leave ingestion, validation, cleanup, diagnostics, and memory control to your application.
 
-Sheetra is different. It treats every spreadsheet as a data contract and every import as a pipeline.
+Pravaah is different. It treats every spreadsheet as a data contract and every import as a pipeline.
 
 - Stream large CSV/XLSX files without loading the entire dataset into memory.
 - Validate rows with TypeScript-inferred schemas.
@@ -42,7 +42,7 @@ Sheetra is different. It treats every spreadsheet as a data contract and every i
 ## Install
 
 ```sh
-npm install sheetra
+npm install pravaah
 ```
 
 Requirements:
@@ -55,14 +55,14 @@ Requirements:
 ### Read A File
 
 ```ts
-import { read } from "sheetra";
+import { read } from "pravaah";
 
 for await (const row of read("customers.csv")) {
   console.log(row);
 }
 ```
 
-Sheetra auto-detects `.csv`, `.xlsx`, and `.json` from the file extension. You can also force a format:
+Pravaah auto-detects `.csv`, `.xlsx`, and `.json` from the file extension. You can also force a format:
 
 ```ts
 const rows = await read(buffer, { format: "xlsx", sheet: "Customers" }).collect();
@@ -71,7 +71,7 @@ const rows = await read(buffer, { format: "xlsx", sheet: "Customers" }).collect(
 ### Transform And Write
 
 ```ts
-import { read, schema } from "sheetra";
+import { read, schema } from "pravaah";
 
 const stats = await read("orders.csv")
   .schema({
@@ -94,7 +94,7 @@ console.log(stats.rowsWritten, stats.durationMs);
 ### Parse With A Schema
 
 ```ts
-import { parse, schema } from "sheetra";
+import { parse, schema } from "pravaah";
 
 const orders = await parse(
   "orders.csv",
@@ -119,7 +119,7 @@ const orders = await parse(
 ### Collect Validation Issues
 
 ```ts
-import { parseDetailed, schema, writeIssueReport } from "sheetra";
+import { parseDetailed, schema, writeIssueReport } from "pravaah";
 
 const result = await parseDetailed(
   "contacts.xlsx",
@@ -147,7 +147,7 @@ console.log(result.rows.length, result.issues.length);
 ### Count Rows Without Materializing Them
 
 ```ts
-import { read } from "sheetra";
+import { read } from "pravaah";
 
 const stats = await read("large-file.csv").drain();
 
@@ -160,10 +160,10 @@ For CSV files, `drain()` uses a raw record-boundary scanner when no transforms a
 
 ### Streaming Pipelines
 
-`read()` returns a lazy `SheetraPipeline`.
+`read()` returns a lazy `PravaahPipeline`.
 
 ```ts
-import { read, schema } from "sheetra";
+import { read, schema } from "pravaah";
 
 const pipeline = read("input.csv")
   .clean({ trim: true })
@@ -197,7 +197,7 @@ Adjacent `.map()` and `.filter()` calls are fused into a single iteration pass t
 Schemas validate incoming rows and infer TypeScript types.
 
 ```ts
-import { schema } from "sheetra";
+import { schema } from "pravaah";
 
 const userSchema = {
   id: schema.string(),
@@ -227,7 +227,7 @@ Validation modes:
 ### Cleaning
 
 ```ts
-import { read } from "sheetra";
+import { read } from "pravaah";
 
 const rows = await read("customers.csv")
   .clean({
@@ -249,7 +249,7 @@ Cleaning supports trimming, whitespace normalization, fuzzy header mapping, and 
 ### CSV
 
 ```ts
-import { read } from "sheetra";
+import { read } from "pravaah";
 
 const rows = await read("data.csv", {
   headers: true,
@@ -274,7 +274,7 @@ CSV features:
 ### XLSX
 
 ```ts
-import { read } from "sheetra";
+import { read } from "pravaah";
 
 const rows = await read("workbook.xlsx", {
   sheet: "Invoices",
@@ -293,7 +293,7 @@ XLSX read features:
 ### JSON
 
 ```ts
-import { read } from "sheetra";
+import { read } from "pravaah";
 
 const rows = await read("rows.json", { format: "json" }).collect();
 await read(rows).write("rows.json", { format: "json" });
@@ -306,7 +306,7 @@ JSON support is useful for fixtures, snapshots, intermediate ETL files, and test
 Use `write()` for simple row exports. Use workbook helpers when you need multiple sheets, formulas, column widths, merges, data validations, auto-filters, or frozen panes.
 
 ```ts
-import { formula, workbook, worksheet, writeWorkbook } from "sheetra";
+import { formula, workbook, worksheet, writeWorkbook } from "pravaah";
 
 const summary = worksheet("Summary", [
   { metric: "Revenue", value: 125000 },
@@ -324,7 +324,7 @@ summary.validations = [{ range: "B2:B100", type: "decimal", formula: "0" }];
 summary.tables = [{ name: "SummaryTable", range: "A1:B4", columns: ["metric", "value"] }];
 
 const book = workbook([summary]);
-book.properties.creator = "Sheetra";
+book.properties.creator = "Pravaah";
 
 await writeWorkbook(book, "report.xlsx");
 ```
@@ -332,7 +332,7 @@ await writeWorkbook(book, "report.xlsx");
 ## Query Data
 
 ```ts
-import { query } from "sheetra";
+import { query } from "pravaah";
 
 const topAccounts = await query(
   "accounts.csv",
@@ -350,7 +350,7 @@ Supported SQL-like clauses:
 For in-memory joins and lookups:
 
 ```ts
-import { createIndex, joinRows } from "sheetra";
+import { createIndex, joinRows } from "pravaah";
 
 const byCustomer = createIndex(customers, "customerId");
 const enrichedOrders = joinRows(orders, customers, "customerId");
@@ -359,7 +359,7 @@ const enrichedOrders = joinRows(orders, customers, "customerId");
 ## Diff Datasets
 
 ```ts
-import { diff, read, writeDiffReport } from "sheetra";
+import { diff, read, writeDiffReport } from "pravaah";
 
 const previous = await read("customers-before.csv").collect();
 const current = await read("customers-after.csv").collect();
@@ -374,7 +374,7 @@ The diff result contains added rows, removed rows, changed rows with changed col
 ## Formula Engine
 
 ```ts
-import { FormulaEngine, evaluateFormula } from "sheetra";
+import { FormulaEngine, evaluateFormula } from "pravaah";
 
 const total = evaluateFormula("SUM(subtotal, tax)", {
   subtotal: 100,
@@ -405,7 +405,7 @@ Simple arithmetic expressions such as `subtotal + tax` are also supported.
 ## Plugins
 
 ```ts
-import { FormulaEngine, plugins } from "sheetra";
+import { FormulaEngine, plugins } from "pravaah";
 
 plugins.use({
   name: "business-rules",
@@ -438,7 +438,7 @@ Plugins can provide validators, parsers, exporters, and formula functions.
 ## Parallel Mapping
 
 ```ts
-import { read, workerMap } from "sheetra";
+import { read, workerMap } from "pravaah";
 
 const rows = await read("large.csv", { inferTypes: true }).collect();
 
@@ -516,7 +516,7 @@ Environment used for the published numbers:
 ```mermaid
 xychart-beta
   title "CSV Read: 1M Rows, 244MB - Lower Is Better"
-  x-axis ["Sheetra", "fast-csv", "SheetJS"]
+  x-axis ["Pravaah", "fast-csv", "SheetJS"]
   y-axis "Seconds" 0 --> 9
   bar [1.90, 8.57, 7.47]
 ```
@@ -524,20 +524,20 @@ xychart-beta
 ```mermaid
 xychart-beta
   title "XLSX Read: 36K Rows, 1.5MB - Lower Is Better"
-  x-axis ["Sheetra", "SheetJS", "ExcelJS"]
+  x-axis ["Pravaah", "SheetJS", "ExcelJS"]
   y-axis "Seconds" 0 --> 0.7
   bar [0.390, 0.431, 0.575]
 ```
 
 | Workload | Engine | Time | Peak RSS |
 | --- | --- | ---: | ---: |
-| CSV read, 1M rows, 244MB | Sheetra | **1.90s** | **110MB** |
+| CSV read, 1M rows, 244MB | Pravaah | **1.90s** | **110MB** |
 | CSV read, 1M rows, 244MB | fast-csv | 8.57s | 149MB |
 | CSV read, 1M rows, 244MB | SheetJS | 7.47s | 3,413MB |
-| CSV read, 1K rows, 498KB | Sheetra | **8ms** | **84MB** |
+| CSV read, 1K rows, 498KB | Pravaah | **8ms** | **84MB** |
 | CSV read, 1K rows, 498KB | fast-csv | 28ms | 95MB |
 | CSV read, 1K rows, 498KB | SheetJS | 103ms | 124MB |
-| XLSX read, 36K rows, 1.5MB | Sheetra | **390ms** | **123MB** |
+| XLSX read, 36K rows, 1.5MB | Pravaah | **390ms** | **123MB** |
 | XLSX read, 36K rows, 1.5MB | SheetJS | 431ms | 234MB |
 | XLSX read, 36K rows, 1.5MB | ExcelJS | 575ms | 295MB |
 
@@ -548,7 +548,7 @@ For count-only CSV probes, `read(csv).drain()` scanned 1M rows / 244MB in **760m
 ```mermaid
 xychart-beta
   title "CSV Write: 100K Rows - Lower Is Better"
-  x-axis ["Sheetra", "fast-csv", "SheetJS"]
+  x-axis ["Pravaah", "fast-csv", "SheetJS"]
   y-axis "Milliseconds" 0 --> 550
   bar [141, 126, 483]
 ```
@@ -556,17 +556,17 @@ xychart-beta
 ```mermaid
 xychart-beta
   title "XLSX Write: 100K Rows - Lower Is Better"
-  x-axis ["Sheetra", "SheetJS", "ExcelJS"]
+  x-axis ["Pravaah", "SheetJS", "ExcelJS"]
   y-axis "Milliseconds" 0 --> 2000
   bar [710, 755, 1846]
 ```
 
 | Workload | Engine | Time | Peak RSS |
 | --- | --- | ---: | ---: |
-| CSV write, 100K rows | Sheetra | **141ms** | **138MB** |
+| CSV write, 100K rows | Pravaah | **141ms** | **138MB** |
 | CSV write, 100K rows | fast-csv | 126ms | 166MB |
 | CSV write, 100K rows | SheetJS | 483ms | 315MB |
-| XLSX write, 100K rows | Sheetra | **710ms** | **222MB** |
+| XLSX write, 100K rows | Pravaah | **710ms** | **222MB** |
 | XLSX write, 100K rows | SheetJS | 755ms | 451MB |
 | XLSX write, 100K rows | ExcelJS | 1,846ms | 1,075MB |
 
@@ -575,7 +575,7 @@ xychart-beta
 ```mermaid
 xychart-beta
   title "Peak RSS: CSV Read 1M Rows - Lower Is Better"
-  x-axis ["Sheetra", "fast-csv", "SheetJS"]
+  x-axis ["Pravaah", "fast-csv", "SheetJS"]
   y-axis "MB" 0 --> 3500
   bar [110, 149, 3413]
 ```
@@ -583,7 +583,7 @@ xychart-beta
 ```mermaid
 xychart-beta
   title "Peak RSS: XLSX Write 100K Rows - Lower Is Better"
-  x-axis ["Sheetra", "SheetJS", "ExcelJS"]
+  x-axis ["Pravaah", "SheetJS", "ExcelJS"]
   y-axis "MB" 0 --> 1100
   bar [222, 451, 1075]
 ```
@@ -592,10 +592,10 @@ xychart-beta
 
 | Workload | Result |
 | --- | --- |
-| CSV read, 1M rows | Sheetra is **4.5x faster** and uses **26% less memory** than fast-csv. |
-| CSV write, 100K rows | Sheetra is close to fast-csv throughput and uses **17% less memory**. |
-| XLSX read, 36K rows | Sheetra is **10% faster** and uses **47% less memory** than SheetJS. |
-| XLSX write, 100K rows | Sheetra is **6% faster** and uses **51% less memory** than SheetJS. |
+| CSV read, 1M rows | Pravaah is **4.5x faster** and uses **26% less memory** than fast-csv. |
+| CSV write, 100K rows | Pravaah is close to fast-csv throughput and uses **17% less memory**. |
+| XLSX read, 36K rows | Pravaah is **10% faster** and uses **47% less memory** than SheetJS. |
+| XLSX write, 100K rows | Pravaah is **6% faster** and uses **51% less memory** than SheetJS. |
 
 ## How The Performance Works
 
@@ -620,9 +620,9 @@ xychart-beta
 - Fused map/filter stages.
 - Built-in stats for processed rows, written rows, duration, errors, warnings, sheets, and peak RSS.
 
-## When To Use Sheetra
+## When To Use Pravaah
 
-Sheetra is a strong fit for:
+Pravaah is a strong fit for:
 
 - Customer CSV/XLSX uploads.
 - Admin import tools.
@@ -633,7 +633,7 @@ Sheetra is a strong fit for:
 - Dataset comparison and audit reports.
 - TypeScript services that need predictable spreadsheet ingestion.
 
-Sheetra is not trying to be a complete Excel desktop clone. If your main goal is pixel-perfect spreadsheet styling, charts, drawings, macros, or arbitrary workbook editing, a workbook-manipulation library may be a better primary tool.
+Pravaah is not trying to be a complete Excel desktop clone. If your main goal is pixel-perfect spreadsheet styling, charts, drawings, macros, or arbitrary workbook editing, a workbook-manipulation library may be a better primary tool.
 
 ## Scripts
 
@@ -649,11 +649,11 @@ npm run benchmark:isolated
 Benchmark controls:
 
 ```sh
-SHEETRA_BENCH_WRITE_ROWS=100000 npm run benchmark:isolated
-SHEETRA_BENCH_SKIP_WRITE=1 npm run benchmark:isolated
-SHEETRA_BENCH_SKIP_READ=1 npm run benchmark:isolated
-SHEETRA_BENCH_INCLUDE_MEMORY=1 npm run benchmark:isolated
-SHEETRA_BENCH_RUNS=5 npm run benchmark:isolated
+PRAVAAH_BENCH_WRITE_ROWS=100000 npm run benchmark:isolated
+PRAVAAH_BENCH_SKIP_WRITE=1 npm run benchmark:isolated
+PRAVAAH_BENCH_SKIP_READ=1 npm run benchmark:isolated
+PRAVAAH_BENCH_INCLUDE_MEMORY=1 npm run benchmark:isolated
+PRAVAAH_BENCH_RUNS=5 npm run benchmark:isolated
 ```
 
 ## Roadmap

@@ -1,10 +1,10 @@
-# Sheetra Benchmarks
+# Pravaah Benchmarks
 
-The benchmark suite is intentionally reproducible and conservative. Use it to compare Sheetra with SheetJS, ExcelJS, and focused CSV tools before making performance claims.
+The benchmark suite is intentionally reproducible and conservative. Use it to compare Pravaah with SheetJS, ExcelJS, and focused CSV tools before making performance claims.
 
 ```sh
-SHEETRA_BENCH_ROWS=100000 npm run benchmark
-SHEETRA_BENCH_ROWS=100000 npm run benchmark:compare
+PRAVAAH_BENCH_ROWS=100000 npm run benchmark
+PRAVAAH_BENCH_ROWS=100000 npm run benchmark:compare
 npm run benchmark:files
 npm run benchmark:strong
 ```
@@ -13,8 +13,8 @@ npm run benchmark:strong
 
 `benchmark:strong` is the production-oriented suite. It covers:
 
-- Scale: 100k, 500k, 1M, and 2M+ rows through `SHEETRA_BENCH_SCALES`.
-- Streaming vs in-memory: Sheetra raw streaming, Sheetra feature-enabled ingestion, fast-csv streaming, ExcelJS in-memory/streaming, and SheetJS in-memory where practical.
+- Scale: 100k, 500k, 1M, and 2M+ rows through `PRAVAAH_BENCH_SCALES`.
+- Streaming vs in-memory: Pravaah raw streaming, Pravaah feature-enabled ingestion, fast-csv streaming, ExcelJS in-memory/streaming, and SheetJS in-memory where practical.
 - XLSX: generated XLSX files, formula-preserving workbooks, and multi-sheet files.
 - Shapes: tall datasets and wide datasets.
 - Transform complexity: no transform, light transform, and CPU-heavy transform.
@@ -24,20 +24,20 @@ npm run benchmark:strong
 - Cold/warm behavior: first and second runs against the same file.
 - Real scenarios: CRM import, log export, financial formulas, and local file-size fixtures.
 
-Sheetra modes are intentionally split:
+Pravaah modes are intentionally split:
 
 - Raw mode: no type inference, no schema, no cleaning; closest comparison to stream-first parsers.
 - Feature-enabled mode: `inferTypes`, schema validation, cleaning, and issue collection where the suite is testing production ingestion behavior.
 
 Useful controls:
 
-- `SHEETRA_BENCH_FILE=MOCK_DATA.csv npm run benchmark:files`
-- `SHEETRA_BENCH_LIMIT=100000 npm run benchmark:files`
-- `SHEETRA_BENCH_INCLUDE_MEMORY=1 npm run benchmark:files`
-- `SHEETRA_BENCH_PROFILE=full npm run benchmark:strong`
-- `SHEETRA_BENCH_SCALES=100000,500000,1000000,2000000 npm run benchmark:strong`
-- `SHEETRA_BENCH_XLSX_ROWS=50000 npm run benchmark:strong`
-- `SHEETRA_BENCH_WIDE_ROWS=50000 npm run benchmark:strong`
+- `PRAVAAH_BENCH_FILE=MOCK_DATA.csv npm run benchmark:files`
+- `PRAVAAH_BENCH_LIMIT=100000 npm run benchmark:files`
+- `PRAVAAH_BENCH_INCLUDE_MEMORY=1 npm run benchmark:files`
+- `PRAVAAH_BENCH_PROFILE=full npm run benchmark:strong`
+- `PRAVAAH_BENCH_SCALES=100000,500000,1000000,2000000 npm run benchmark:strong`
+- `PRAVAAH_BENCH_XLSX_ROWS=50000 npm run benchmark:strong`
+- `PRAVAAH_BENCH_WIDE_ROWS=50000 npm run benchmark:strong`
 
 Track:
 

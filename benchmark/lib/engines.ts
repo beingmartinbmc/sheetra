@@ -4,7 +4,7 @@ import ExcelJS from "exceljs";
 import { read, write } from "../../src/index.js";
 import type { ReadOptions, Row } from "../../src/index.js";
 
-export async function drainSheetraCsv(
+export async function drainPravaahCsv(
   path: string,
   transform?: (row: Row) => Row,
   options: ReadOptions = {},
@@ -67,7 +67,7 @@ export async function drainExcelJsStreaming(path: string): Promise<number> {
   return Math.max(0, rows - 1);
 }
 
-export async function sheetraCsvEndToEnd(input: string, output: string, transform: (row: Row) => Row): Promise<number> {
+export async function pravaahCsvEndToEnd(input: string, output: string, transform: (row: Row) => Row): Promise<number> {
   const pipeline = read(input).map((row) => transform(row as Row));
   const stats = await write(pipeline, output, { format: "csv" });
   return stats.rowsProcessed;

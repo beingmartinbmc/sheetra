@@ -49,9 +49,9 @@ function generateRows(count: number): Array<Record<string, unknown>> {
 }
 
 const readRunners: Record<string, Runner> = {
-  "sheetra-raw-drain": async () => (await read(file).drain()).rowsProcessed,
-  "sheetra-row-parse": async () => (await read(file).map((row) => row).drain()).rowsProcessed,
-  sheetra: async () => (await read(file).drain()).rowsProcessed,
+  "pravaah-raw-drain": async () => (await read(file).drain()).rowsProcessed,
+  "pravaah-row-parse": async () => (await read(file).map((row) => row).drain()).rowsProcessed,
+  pravaah: async () => (await read(file).drain()).rowsProcessed,
   fastcsv: () =>
     new Promise<number>((resolve, reject) => {
       let rows = 0;
@@ -82,20 +82,20 @@ const readRunners: Record<string, Runner> = {
   },
 };
 
-const writeRowCount = Number(process.env.SHEETRA_BENCH_WRITE_ROWS ?? file);
+const writeRowCount = Number(process.env.PRAVAAH_BENCH_WRITE_ROWS ?? file);
 
 const writeRunners: Record<string, Runner> = {
-  "sheetra-write-csv": async () => {
+  "pravaah-write-csv": async () => {
     const rows = generateRows(writeRowCount);
-    const dir = await mkdtemp(join(tmpdir(), "sheetra-bench-"));
+    const dir = await mkdtemp(join(tmpdir(), "pravaah-bench-"));
     const dest = join(dir, "out.csv");
     await write(rows, dest, { format: "csv" });
     await rm(dir, { recursive: true, force: true });
     return rows.length;
   },
-  "sheetra-write-xlsx": async () => {
+  "pravaah-write-xlsx": async () => {
     const rows = generateRows(writeRowCount);
-    const dir = await mkdtemp(join(tmpdir(), "sheetra-bench-"));
+    const dir = await mkdtemp(join(tmpdir(), "pravaah-bench-"));
     const dest = join(dir, "out.xlsx");
     await write(rows, dest, { format: "xlsx" });
     await rm(dir, { recursive: true, force: true });
@@ -103,7 +103,7 @@ const writeRunners: Record<string, Runner> = {
   },
   "fastcsv-write": async () => {
     const rows = generateRows(writeRowCount);
-    const dir = await mkdtemp(join(tmpdir(), "sheetra-bench-"));
+    const dir = await mkdtemp(join(tmpdir(), "pravaah-bench-"));
     const dest = join(dir, "out.csv");
     const csv = formatCsv({ headers: true });
     csv.pipe(createWriteStream(dest));
@@ -117,7 +117,7 @@ const writeRunners: Record<string, Runner> = {
     const xlsxModule = await import("xlsx");
     const xlsx = (xlsxModule as { default?: typeof xlsxModule }).default ?? xlsxModule;
     const rows = generateRows(writeRowCount);
-    const dir = await mkdtemp(join(tmpdir(), "sheetra-bench-"));
+    const dir = await mkdtemp(join(tmpdir(), "pravaah-bench-"));
     const dest = join(dir, "out.csv");
     const ws = xlsx.utils.json_to_sheet(rows);
     const wb = xlsx.utils.book_new();
@@ -130,7 +130,7 @@ const writeRunners: Record<string, Runner> = {
     const xlsxModule = await import("xlsx");
     const xlsx = (xlsxModule as { default?: typeof xlsxModule }).default ?? xlsxModule;
     const rows = generateRows(writeRowCount);
-    const dir = await mkdtemp(join(tmpdir(), "sheetra-bench-"));
+    const dir = await mkdtemp(join(tmpdir(), "pravaah-bench-"));
     const dest = join(dir, "out.xlsx");
     const ws = xlsx.utils.json_to_sheet(rows);
     const wb = xlsx.utils.book_new();
@@ -143,7 +143,7 @@ const writeRunners: Record<string, Runner> = {
     const ExcelJSModule = await import("exceljs");
     const ExcelJS = (ExcelJSModule as { default?: typeof ExcelJSModule }).default ?? ExcelJSModule;
     const data = generateRows(writeRowCount);
-    const dir = await mkdtemp(join(tmpdir(), "sheetra-bench-"));
+    const dir = await mkdtemp(join(tmpdir(), "pravaah-bench-"));
     const dest = join(dir, "out.xlsx");
     const workbook = new ExcelJS.Workbook();
     const sheet = workbook.addWorksheet("Sheet1");
