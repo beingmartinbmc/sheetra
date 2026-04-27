@@ -1,212 +1,652 @@
 # Sheetra
 
-Sheetra is a streaming-first spreadsheet pipeline library for Node.js.
+Production-grade Excel, CSV, and JSON pipelines for Node.js.
 
-It is designed for large, messy, real-world Excel and CSV files, where correctness, memory stability, and data validation matter more than just reading cells.
-
-Unlike SheetJS or ExcelJS, Sheetra treats spreadsheets as:
-
-**data contracts + processing pipelines**
-
-## Why Sheetra
-
-Most Node.js Excel libraries focus on file manipulation.
-
-Sheetra focuses on data ingestion and transformation:
-
-- Typed schemas instead of loose objects.
-- Streaming pipelines instead of in-memory loading.
-- Validation and cleaning built in.
-- Predictable memory usage on large files.
-- Zero heavyweight XML or CSV parser dependencies on the hot path.
-
-The goal: make Excel safe for backend systems.
-
-## Example
+Sheetra turns spreadsheets into typed, validated, streaming data pipelines. It is built for backend import jobs, ETL flows, customer uploads, audits, and data products where spreadsheet files are large, messy, and business-critical.
 
 ```ts
 import { read, schema } from "sheetra";
 
-const leadSchema = {
-  email: schema.email(),
-  age: schema.number({ optional: true }),
-  joined: schema.date(),
-};
-
-const rows = await read("leads.xlsx")
+const leads = await read("leads.xlsx")
   .clean({
     trim: true,
     normalizeWhitespace: true,
-    fuzzyHeaders: { email: ["E-mail", "email id", "mail"] },
+    fuzzyHeaders: {
+      email: ["E-mail", "email id", "mail"],
+      company: ["Company Name", "account"],
+    },
   })
-  .schema(leadSchema, { validation: "fail-fast" })
-  .filter((row) => row.age === undefined || row.age > 18)
+  .schema({
+    email: schema.email(),
+    company: schema.string(),
+    employees: schema.number({ optional: true }),
+    joinedAt: schema.date({ optional: true }),
+  })
+  .filter((lead) => lead.email.endsWith("@example.com"))
   .collect();
 ```
 
-## Core Capabilities
+## Why Sheetra
 
-### Streaming-First Pipelines
+Most Node.js spreadsheet libraries are file manipulation libraries. They help you read cells or write workbooks, but leave ingestion, validation, cleanup, diagnostics, and memory control to your application.
 
-- AsyncIterable API: `read().map().filter().clean().schema().write()`.
-- Backpressure-aware processing.
-- Constant-memory CSV pipelines.
-- Fused map/filter chains: adjacent `.map()` and `.filter()` calls are compiled into a single generator loop, eliminating per-row microtask overhead.
+Sheetra is different. It treats every spreadsheet as a data contract and every import as a pipeline.
 
-### Type-Safe Ingestion
+- Stream large CSV/XLSX files without loading the entire dataset into memory.
+- Validate rows with TypeScript-inferred schemas.
+- Clean messy headers and whitespace before data reaches your database.
+- Query, diff, join, transform, and write data using one API.
+- Preserve formulas and build workbooks when you need XLSX output.
+- Measure throughput and RSS with reproducible benchmarks.
 
-- Schema validation with TypeScript inference.
-- Coercion, optional fields, and structured errors.
-- Fail-fast or partial recovery modes.
+## Install
 
-### Data Cleaning & Normalization
+```sh
+npm install sheetra
+```
 
-- Trim, whitespace normalization, and deduplication.
-- Fuzzy header matching.
-- Built-in validation helpers for email, number, date, and more.
+Requirements:
 
-### XLSX + CSV Support
+- Node.js 20 or newer.
+- ESM project or compatible bundler/runtime.
 
-- CSV: custom streaming parser with raw fast path and `drain()`.
-- XLSX: selective decompression, lazy shared strings, buffer-based XML scanning.
+## Quick Start
 
-### Query, Diffing, and Transformations
+### Read A File
 
-- SQL-like queries: `SELECT`, `WHERE`, `ORDER BY`, `LIMIT`.
-- Indexing and joins.
-- Row-level diffing.
+```ts
+import { read } from "sheetra";
 
-### Extensibility
+for await (const row of read("customers.csv")) {
+  console.log(row);
+}
+```
 
-Plugin system for:
+Sheetra auto-detects `.csv`, `.xlsx`, and `.json` from the file extension. You can also force a format:
 
-- Validators.
-- Parsers.
-- Exporters.
-- Formula functions.
+```ts
+const rows = await read(buffer, { format: "xlsx", sheet: "Customers" }).collect();
+```
 
-### Performance & Observability
+### Transform And Write
 
-- Worker-thread mapping.
-- Benchmark scripts checked into the repo.
-- Memory tracking and timeline sampling.
+```ts
+import { read, schema } from "sheetra";
 
-## Positioning
+const stats = await read("orders.csv")
+  .schema({
+    orderId: schema.string(),
+    email: schema.email(),
+    total: schema.number(),
+  })
+  .filter((row) => row.total > 100)
+  .map((row) => ({
+    ...row,
+    status: "priority",
+  }))
+  .write("priority-orders.xlsx", {
+    sheetName: "Priority Orders",
+  });
 
-Sheetra does not aim to be:
+console.log(stats.rowsWritten, stats.durationMs);
+```
 
-- A full Excel styling engine.
+### Parse With A Schema
 
-Instead, it focuses on:
+```ts
+import { parse, schema } from "sheetra";
 
-**the fastest memory-stable data pipeline for large spreadsheet workloads.**
+const orders = await parse(
+  "orders.csv",
+  {
+    orderId: schema.string(),
+    email: schema.email(),
+    total: schema.number({
+      validate: (value) => (value < 0 ? "total cannot be negative" : undefined),
+    }),
+    paid: schema.boolean({ defaultValue: false }),
+  },
+  {
+    format: "csv",
+    validation: "fail-fast",
+  },
+);
+
+// orders is inferred as:
+// Array<{ orderId: string; email: string; total: number; paid: boolean }>
+```
+
+### Collect Validation Issues
+
+```ts
+import { parseDetailed, schema, writeIssueReport } from "sheetra";
+
+const result = await parseDetailed(
+  "contacts.xlsx",
+  {
+    email: schema.email(),
+    phone: schema.phone({ optional: true }),
+    source: schema.string({ defaultValue: "upload" }),
+  },
+  {
+    validation: "collect",
+    cleaning: {
+      trim: true,
+      fuzzyHeaders: {
+        email: ["E-mail Address", "mail"],
+        phone: ["mobile", "phone number"],
+      },
+    },
+  },
+);
+
+await writeIssueReport(result.issues, "import-issues.csv");
+console.log(result.rows.length, result.issues.length);
+```
+
+### Count Rows Without Materializing Them
+
+```ts
+import { read } from "sheetra";
+
+const stats = await read("large-file.csv").drain();
+
+console.log(`Processed ${stats.rowsProcessed} rows`);
+```
+
+For CSV files, `drain()` uses a raw record-boundary scanner when no transforms are attached. It counts rows without allocating row objects.
+
+## Core Concepts
+
+### Streaming Pipelines
+
+`read()` returns a lazy `SheetraPipeline`.
+
+```ts
+import { read, schema } from "sheetra";
+
+const pipeline = read("input.csv")
+  .clean({ trim: true })
+  .schema({
+    email: schema.email(),
+    name: schema.string({ optional: true }),
+  })
+  .map((row) => ({ ...row, importedAt: new Date().toISOString() }))
+  .filter((row) => row.email.endsWith("@example.com"))
+  .take(10_000);
+
+const rows = await pipeline.collect();
+```
+
+Available pipeline methods:
+
+- `.map(fn)` transforms rows.
+- `.filter(fn)` keeps matching rows.
+- `.clean(options)` normalizes row values and headers.
+- `.schema(definition, options)` validates and types rows.
+- `.take(limit)` stops after a fixed number of rows.
+- `.collect()` materializes rows into an array.
+- `.process()` returns rows, issues, and stats.
+- `.drain()` consumes rows without storing them.
+- `.write(destination, options)` writes the pipeline output.
+
+Adjacent `.map()` and `.filter()` calls are fused into a single iteration pass to reduce per-row async overhead.
+
+### Schemas
+
+Schemas validate incoming rows and infer TypeScript types.
+
+```ts
+import { schema } from "sheetra";
+
+const userSchema = {
+  id: schema.string(),
+  name: schema.string({ validate: (value) => (value.length < 2 ? "name too short" : undefined) }),
+  age: schema.number({ optional: true }),
+  active: schema.boolean({ defaultValue: true }),
+  signupDate: schema.date(),
+  email: schema.email(),
+  phone: schema.phone({ optional: true }),
+  metadata: schema.any({ optional: true }),
+};
+```
+
+Field options:
+
+- `optional`: allow missing, `null`, or empty values.
+- `defaultValue`: use a fallback when the cell is empty.
+- `coerce`: convert spreadsheet strings into typed values.
+- `validate`: add domain-specific validation.
+
+Validation modes:
+
+- `fail-fast`: throw on the first invalid row.
+- `collect`: keep valid rows and collect/report issues.
+- `skip`: skip invalid rows without warnings.
+
+### Cleaning
+
+```ts
+import { read } from "sheetra";
+
+const rows = await read("customers.csv")
+  .clean({
+    trim: true,
+    normalizeWhitespace: true,
+    dedupeKey: ["email", "accountId"],
+    fuzzyHeaders: {
+      email: ["E-mail", "Email Address", "mail"],
+      accountId: ["Account ID", "acct id"],
+    },
+  })
+  .collect();
+```
+
+Cleaning supports trimming, whitespace normalization, fuzzy header mapping, and deduplication by one or more keys.
+
+## File Formats
+
+### CSV
+
+```ts
+import { read } from "sheetra";
+
+const rows = await read("data.csv", {
+  headers: true,
+  delimiter: ",",
+  inferTypes: true,
+}).collect();
+
+await read("data.csv").write("copy.csv", {
+  headers: ["id", "email", "total"],
+});
+```
+
+CSV features:
+
+- Streaming parser built for backend ingestion.
+- RFC-style quoted fields, escaped quotes, and CRLF handling.
+- `headers: true`, `headers: false`, or explicit header arrays.
+- Single-character custom delimiters.
+- Optional primitive inference for numbers, booleans, and nulls.
+- Backpressure-aware CSV writing.
+
+### XLSX
+
+```ts
+import { read } from "sheetra";
+
+const rows = await read("workbook.xlsx", {
+  sheet: "Invoices",
+  formulas: "preserve",
+}).collect();
+```
+
+XLSX read features:
+
+- Sheet selection by name or index.
+- Selective zip decompression of only required workbook entries.
+- Lazy shared-string resolution.
+- Buffer-based worksheet XML scanning.
+- Formula preservation with `{ formula, result }` cells.
+
+### JSON
+
+```ts
+import { read } from "sheetra";
+
+const rows = await read("rows.json", { format: "json" }).collect();
+await read(rows).write("rows.json", { format: "json" });
+```
+
+JSON support is useful for fixtures, snapshots, intermediate ETL files, and tests.
+
+## Workbook Authoring
+
+Use `write()` for simple row exports. Use workbook helpers when you need multiple sheets, formulas, column widths, merges, data validations, auto-filters, or frozen panes.
+
+```ts
+import { formula, workbook, worksheet, writeWorkbook } from "sheetra";
+
+const summary = worksheet("Summary", [
+  { metric: "Revenue", value: 125000 },
+  { metric: "Target", value: 100000 },
+  { metric: "Delta", value: formula("B2-B3", 25000) },
+]);
+
+summary.columns = [
+  { header: "metric", width: 24 },
+  { header: "value", width: 16 },
+];
+summary.merges = ["A1:B1"];
+summary.frozen = { ySplit: 1, topLeftCell: "A2" };
+summary.validations = [{ range: "B2:B100", type: "decimal", formula: "0" }];
+summary.tables = [{ name: "SummaryTable", range: "A1:B4", columns: ["metric", "value"] }];
+
+const book = workbook([summary]);
+book.properties.creator = "Sheetra";
+
+await writeWorkbook(book, "report.xlsx");
+```
+
+## Query Data
+
+```ts
+import { query } from "sheetra";
+
+const topAccounts = await query(
+  "accounts.csv",
+  "SELECT id, name, revenue WHERE revenue >= 100000 ORDER BY revenue DESC LIMIT 25",
+);
+```
+
+Supported SQL-like clauses:
+
+- `SELECT *` or a comma-separated column list.
+- `WHERE` with `=`, `!=`, `>`, `>=`, `<`, `<=`, and `contains`.
+- `ORDER BY column ASC|DESC`.
+- `LIMIT n`.
+
+For in-memory joins and lookups:
+
+```ts
+import { createIndex, joinRows } from "sheetra";
+
+const byCustomer = createIndex(customers, "customerId");
+const enrichedOrders = joinRows(orders, customers, "customerId");
+```
+
+## Diff Datasets
+
+```ts
+import { diff, read, writeDiffReport } from "sheetra";
+
+const previous = await read("customers-before.csv").collect();
+const current = await read("customers-after.csv").collect();
+
+const result = diff(previous, current, { key: "customerId" });
+
+await writeDiffReport(result, "customer-diff.csv");
+```
+
+The diff result contains added rows, removed rows, changed rows with changed columns, and an unchanged count.
+
+## Formula Engine
+
+```ts
+import { FormulaEngine, evaluateFormula } from "sheetra";
+
+const total = evaluateFormula("SUM(subtotal, tax)", {
+  subtotal: 100,
+  tax: 8.25,
+});
+
+const engine = new FormulaEngine({
+  functions: {
+    DISCOUNT: ([amount, percent]) => Number(amount) * (1 - Number(percent)),
+  },
+});
+
+const discounted = engine.evaluate("DISCOUNT(total, 0.15)", { total: 200 });
+```
+
+Built-in functions:
+
+- `SUM`
+- `AVERAGE`
+- `MIN`
+- `MAX`
+- `COUNT`
+- `IF`
+- `CONCAT`
+
+Simple arithmetic expressions such as `subtotal + tax` are also supported.
+
+## Plugins
+
+```ts
+import { FormulaEngine, plugins } from "sheetra";
+
+plugins.use({
+  name: "business-rules",
+  validators: [
+    (row) =>
+      Number(row.total) < 0
+        ? [
+            {
+              code: "negative_total",
+              message: "total cannot be negative",
+              column: "total",
+              rawValue: row.total,
+              expected: ">= 0",
+              severity: "error",
+            },
+          ]
+        : [],
+  ],
+  formulas: {
+    MARGIN: ([revenue, cost]) => Number(revenue) - Number(cost),
+  },
+});
+
+const issues = plugins.validate({ total: -10 });
+const engine = new FormulaEngine({ functions: plugins.formulas() });
+```
+
+Plugins can provide validators, parsers, exporters, and formula functions.
+
+## Parallel Mapping
+
+```ts
+import { read, workerMap } from "sheetra";
+
+const rows = await read("large.csv", { inferTypes: true }).collect();
+
+const enriched = await workerMap(
+  rows,
+  `(row) => ({
+    ...row,
+    score: Number(row.revenue ?? 0) * 0.12
+  })`,
+  { concurrency: 4 },
+);
+```
+
+`workerMap()` is useful for CPU-heavy row transformations. The mapper is passed as a JavaScript function string and executed in Node worker threads.
+
+## API Reference
+
+### Top-Level Functions
+
+| API | Purpose |
+| --- | --- |
+| `read(source, options)` | Create a lazy pipeline from CSV, XLSX, JSON, Buffer, Iterable, or AsyncIterable input. |
+| `write(rows, destination, options)` | Write rows to CSV, XLSX, or JSON. |
+| `parse(source, schema, options)` | Read, validate, and collect typed rows. |
+| `parseDetailed(source, schema, options)` | Read and validate with rows, issues, and stats. |
+| `query(source, sql)` | Run SQL-like queries over row data. |
+| `diff(oldRows, newRows, options)` | Compare datasets by key. |
+| `writeIssueReport(issues, destination)` | Write validation diagnostics as CSV. |
+| `writeDiffReport(result, destination)` | Write diff diagnostics as CSV. |
+| `readWorkbook(source, options)` | Load a full XLSX workbook model. |
+| `writeWorkbook(workbook, destination, options)` | Write a full XLSX workbook model. |
+| `workerMap(rows, mapperSource, options)` | Run parallel row mapping in worker threads. |
+
+### Read Options
+
+| Option | Description |
+| --- | --- |
+| `format` | Force `xlsx`, `csv`, or `json`. |
+| `sheet` | XLSX sheet name or zero-based sheet index. |
+| `headers` | `true`, `false`, or explicit header names. |
+| `delimiter` | CSV delimiter. Must be one character. |
+| `inferTypes` | Convert CSV strings into primitive values. |
+| `formulas` | Use formula cached values or preserve formula cells. |
+| `validation` | `fail-fast`, `collect`, or `skip`. |
+| `cleaning` | Inline cleaning options. |
+
+### Write Options
+
+| Option | Description |
+| --- | --- |
+| `format` | Force `xlsx`, `csv`, or `json`. |
+| `sheetName` | Output XLSX worksheet name. |
+| `headers` | Explicit output column order. |
+| `delimiter` | CSV output delimiter. |
 
 ## Benchmarks
 
-Benchmarks are included as runnable scripts, not marketing claims. Every engine runs in its own fresh Node process so RSS is not contaminated by prior runs.
-
-Run them locally:
+Benchmarks are included as runnable scripts, not hidden marketing claims. Every engine runs in a fresh Node.js process so RSS measurements are not contaminated by prior runs.
 
 ```sh
 npm run benchmark:isolated
 ```
 
-### Environment
+Environment used for the published numbers:
 
 - macOS Darwin 25.4.0, Apple Silicon.
 - Node.js v22.
-- Each engine in a fresh child process, RSS sampled every 25ms, best-of-three.
+- Fresh child process per engine.
+- RSS sampled every 25ms.
+- Best of three runs.
+- Dataset names are intentionally anonymized; comparisons use row counts and file sizes only.
 
----
+### Read Throughput
 
-### CSV Read, 1M Rows, 244MB
+```mermaid
+xychart-beta
+  title "CSV Read: 1M Rows, 244MB - Lower Is Better"
+  x-axis ["Sheetra", "fast-csv", "SheetJS"]
+  y-axis "Seconds" 0 --> 9
+  bar [1.90, 8.57, 7.47]
+```
 
-| Engine | Time | Peak RSS |
-| --- | ---: | ---: |
-| Sheetra (row parse) | **1.90s** | **110MB** |
-| fast-csv | 8.57s | 149MB |
-| SheetJS | 7.47s | 3,413MB |
+```mermaid
+xychart-beta
+  title "XLSX Read: 36K Rows, 1.5MB - Lower Is Better"
+  x-axis ["Sheetra", "SheetJS", "ExcelJS"]
+  y-axis "Seconds" 0 --> 0.7
+  bar [0.390, 0.431, 0.575]
+```
 
-Sheetra's custom streaming CSV parser is **4.5x faster than fast-csv** and uses **26% less memory**. SheetJS materializes the entire file in memory, which is unsafe for backend ingestion at this scale.
+| Workload | Engine | Time | Peak RSS |
+| --- | --- | ---: | ---: |
+| CSV read, 1M rows, 244MB | Sheetra | **1.90s** | **110MB** |
+| CSV read, 1M rows, 244MB | fast-csv | 8.57s | 149MB |
+| CSV read, 1M rows, 244MB | SheetJS | 7.47s | 3,413MB |
+| CSV read, 1K rows, 498KB | Sheetra | **8ms** | **84MB** |
+| CSV read, 1K rows, 498KB | fast-csv | 28ms | 95MB |
+| CSV read, 1K rows, 498KB | SheetJS | 103ms | 124MB |
+| XLSX read, 36K rows, 1.5MB | Sheetra | **390ms** | **123MB** |
+| XLSX read, 36K rows, 1.5MB | SheetJS | 431ms | 234MB |
+| XLSX read, 36K rows, 1.5MB | ExcelJS | 575ms | 295MB |
 
-### CSV Read, 1K Rows, 498KB
+For count-only CSV probes, `read(csv).drain()` scanned 1M rows / 244MB in **760ms** with **114MB** peak RSS by counting record boundaries without parsing cells.
 
-| Engine | Time | Peak RSS |
-| --- | ---: | ---: |
-| Sheetra (row parse) | **8ms** | **84MB** |
-| fast-csv | 28ms | 95MB |
-| SheetJS | 103ms | 124MB |
+### Write Throughput
 
-Even on small files, Sheetra is **3.5x faster** than fast-csv.
+```mermaid
+xychart-beta
+  title "CSV Write: 100K Rows - Lower Is Better"
+  x-axis ["Sheetra", "fast-csv", "SheetJS"]
+  y-axis "Milliseconds" 0 --> 550
+  bar [141, 126, 483]
+```
 
-### CSV Read, Count-Only Drain, 1M Rows, 244MB
+```mermaid
+xychart-beta
+  title "XLSX Write: 100K Rows - Lower Is Better"
+  x-axis ["Sheetra", "SheetJS", "ExcelJS"]
+  y-axis "Milliseconds" 0 --> 2000
+  bar [710, 755, 1846]
+```
 
-| Engine | Time | Peak RSS |
-| --- | ---: | ---: |
-| Sheetra (raw drain) | **760ms** | **114MB** |
+| Workload | Engine | Time | Peak RSS |
+| --- | --- | ---: | ---: |
+| CSV write, 100K rows | Sheetra | **141ms** | **138MB** |
+| CSV write, 100K rows | fast-csv | 126ms | 166MB |
+| CSV write, 100K rows | SheetJS | 483ms | 315MB |
+| XLSX write, 100K rows | Sheetra | **710ms** | **222MB** |
+| XLSX write, 100K rows | SheetJS | 755ms | 451MB |
+| XLSX write, 100K rows | ExcelJS | 1,846ms | 1,075MB |
 
-When only a row count is needed, `read(csv).drain()` scans record boundaries without parsing cells or allocating row objects. Useful for import probes, preflight checks, and progress estimates.
+### Memory Comparison
 
----
+```mermaid
+xychart-beta
+  title "Peak RSS: CSV Read 1M Rows - Lower Is Better"
+  x-axis ["Sheetra", "fast-csv", "SheetJS"]
+  y-axis "MB" 0 --> 3500
+  bar [110, 149, 3413]
+```
 
-### CSV Write, 100K Rows
+```mermaid
+xychart-beta
+  title "Peak RSS: XLSX Write 100K Rows - Lower Is Better"
+  x-axis ["Sheetra", "SheetJS", "ExcelJS"]
+  y-axis "MB" 0 --> 1100
+  bar [222, 451, 1075]
+```
 
-| Engine | Time | Peak RSS |
-| --- | ---: | ---: |
-| Sheetra | **141ms** | **138MB** |
-| fast-csv | 126ms | 166MB |
-| SheetJS | 483ms | 315MB |
+### Benchmark Summary
 
-Sheetra and fast-csv are at parity on CSV write throughput. Sheetra uses **17% less memory** due to backpressure-aware streaming. SheetJS is 3.4x slower and uses 2.3x more memory.
-
----
-
-### XLSX Read, 36K Rows, 1.5MB
-
-| Engine | Time | Peak RSS |
-| --- | ---: | ---: |
-| Sheetra | **390ms** | **123MB** |
-| SheetJS | 431ms | 234MB |
-| ExcelJS | 575ms | 295MB |
-
-Sheetra beats both SheetJS and ExcelJS on time and uses **47% less memory** than SheetJS. The gains come from selective decompression, lazy shared-string resolution, and buffer-based XML scanning.
-
----
-
-### XLSX Write, 100K Rows
-
-| Engine | Time | Peak RSS |
-| --- | ---: | ---: |
-| Sheetra | **710ms** | **222MB** |
-| SheetJS | 755ms | 451MB |
-| ExcelJS | 1,846ms | 1,075MB |
-
-Sheetra writes XLSX **6% faster than SheetJS** and uses **51% less memory**. ExcelJS is 2.6x slower and uses 4.8x more memory.
-
----
-
-### Summary
-
-| Workload | Sheetra vs Best Competitor |
+| Workload | Result |
 | --- | --- |
-| CSV Read (1M rows) | **4.5x faster**, 26% less memory than fast-csv |
-| CSV Write (100K rows) | At parity with fast-csv, 17% less memory |
-| XLSX Read (36K rows) | **10% faster**, 47% less memory than SheetJS |
-| XLSX Write (100K rows) | **6% faster**, 51% less memory than SheetJS |
+| CSV read, 1M rows | Sheetra is **4.5x faster** and uses **26% less memory** than fast-csv. |
+| CSV write, 100K rows | Sheetra is close to fast-csv throughput and uses **17% less memory**. |
+| XLSX read, 36K rows | Sheetra is **10% faster** and uses **47% less memory** than SheetJS. |
+| XLSX write, 100K rows | Sheetra is **6% faster** and uses **51% less memory** than SheetJS. |
 
-### How It Works
+## How The Performance Works
 
-**CSV Read**: custom streaming parser that processes fields directly from the stream buffer. No event-based overhead, no intermediate object allocation per event. For count-only `drain()`, a byte scanner counts record boundaries outside quoted fields without materializing rows.
+### CSV
 
-**CSV Write**: uses `@fast-csv/format` with backpressure-aware streaming. The writable stream's backpressure signal is respected, preventing unbounded memory growth during large writes.
+- Custom streaming parser on the read path.
+- Raw record-boundary scanner for count-only drains.
+- No heavyweight CSV parser dependency in the hot read path.
+- Backpressure-aware writes through `@fast-csv/format`.
 
-**XLSX Read**: selective decompression extracts only the needed zip entries. Shared strings are lazily resolved on demand via an offset index. The worksheet XML is scanned as a raw `Uint8Array` buffer using byte pattern matching, avoiding full UTF-16 string conversion.
+### XLSX
 
-**XLSX Write**: generates XML directly and zips with fflate at compression level 6. No intermediate DOM tree or heavyweight library.
+- Selective decompression reads only workbook metadata, shared strings, relationships, and the targeted sheet.
+- Lazy shared strings are indexed once and decoded on demand.
+- Worksheet XML is scanned from raw bytes instead of building a DOM.
+- Dimension-aware row preallocation avoids sparse arrays.
+- XLSX output writes XML directly and zips with `fflate`.
 
-**Pipeline Fusion**: adjacent `.map()` and `.filter()` calls are compiled into a single async generator. A 5-step pipeline on 1M rows makes 1M iterations instead of 5M.
+### Pipelines
 
-### Benchmark Controls
+- Lazy AsyncIterable execution.
+- Fused map/filter stages.
+- Built-in stats for processed rows, written rows, duration, errors, warnings, sheets, and peak RSS.
+
+## When To Use Sheetra
+
+Sheetra is a strong fit for:
+
+- Customer CSV/XLSX uploads.
+- Admin import tools.
+- Data validation before database writes.
+- ETL jobs.
+- Spreadsheet-backed reports.
+- Large CSV row counting and preflight checks.
+- Dataset comparison and audit reports.
+- TypeScript services that need predictable spreadsheet ingestion.
+
+Sheetra is not trying to be a complete Excel desktop clone. If your main goal is pixel-perfect spreadsheet styling, charts, drawings, macros, or arbitrary workbook editing, a workbook-manipulation library may be a better primary tool.
+
+## Scripts
+
+```sh
+npm run build
+npm run typecheck
+npm test
+npm run coverage
+npm run lint
+npm run benchmark:isolated
+```
+
+Benchmark controls:
 
 ```sh
 SHEETRA_BENCH_WRITE_ROWS=100000 npm run benchmark:isolated
@@ -216,68 +656,13 @@ SHEETRA_BENCH_INCLUDE_MEMORY=1 npm run benchmark:isolated
 SHEETRA_BENCH_RUNS=5 npm run benchmark:isolated
 ```
 
-`benchmark:isolated` runs each engine in a fresh Node process so RSS is not contaminated by previous tests.
-
-### What the Full Suite Covers
-
-- Scale: 1K to 1M+ rows.
-- Read and write benchmarks for CSV and XLSX.
-- Streaming vs in-memory comparisons.
-- CSV raw drain vs row parsing.
-- XLSX multi-sheet and formula-preserving reads.
-- Light vs heavy transformations.
-- End-to-end pipelines: read, validate, transform, write.
-- Fault tolerance: invalid rows, missing values, type errors.
-- Worker-thread scaling.
-- GC time and memory timelines.
-
-## Optimizations
-
-### CSV
-
-- **Custom streaming parser**: replaces `@fast-csv/parse` on the hot path. Parses fields directly from the stream buffer with zero intermediate event overhead.
-- **Record boundary scanner**: count-only `drain()` scans newlines outside quoted fields without allocating row objects.
-- **Write backpressure**: `writeCsv` respects the writable stream's backpressure signal, preventing unbounded memory growth during large writes.
-
-### XLSX
-
-- **Selective decompression**: `readXlsx` only decompresses the worksheet, shared strings, workbook metadata, and rels files. Images, styles, themes, and other entries are skipped entirely.
-- **Lazy shared strings**: builds an offset index on first access, then resolves individual strings on demand. Strings not referenced by the worksheet are never decoded. Frequently accessed strings are cached.
-- **Buffer-based XML scanning**: scans the raw `Uint8Array` for `<row>` and `<sheetData>` markers using byte comparisons, avoiding full UTF-16 string conversion of the entire worksheet.
-- **Dimension-aware pre-allocation**: when a `<dimension>` tag is present, row arrays are pre-allocated to the correct column count, avoiding V8 sparse-array mode.
-- **Dropped fast-xml-parser**: workbook.xml and rels are now parsed with lightweight hand-written XML scanners, removing the ~150KB dependency.
-
-### Pipeline
-
-- **Operation fusion**: adjacent `.map()` and `.filter()` calls are compiled into a single async generator. A 5-step pipeline on 1M rows now makes 1M async iterations instead of 5M.
-
-## CSV Behavior
-
-By default, CSV values are treated as raw strings for performance.
-
-Options:
-
-- `inferTypes: true`: automatic primitive inference.
-- `schema(...)`: explicit typing and validation, recommended for backend ingestion.
-
 ## Roadmap
 
-1. Foundation: API, tests, benchmarks.
-2. Fast streaming core: constant-memory pipelines.
-3. Type-safe ingestion: schemas, diagnostics.
-4. Feature parity: XLSX model, formulas, metadata.
-5. Differentiators: SQL, diffing, plugins, parallelism.
-6. Benchmark proof: reproducible performance claims.
-
-## Scripts
-
-```sh
-npm run build
-npm test
-npm run lint
-npm run benchmark:isolated
-npm run benchmark:strong
-```
+- Broader XLSX formatting coverage.
+- More formula functions.
+- Streaming XLSX write for extremely large exports.
+- More SQL-like query operators.
+- First-party adapters for common upload and ETL frameworks.
 
 ## License
 
