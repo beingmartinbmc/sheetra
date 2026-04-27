@@ -14,7 +14,7 @@ npm run benchmark:strong
 `benchmark:strong` is the production-oriented suite. It covers:
 
 - Scale: 100k, 500k, 1M, and 2M+ rows through `SHEETRA_BENCH_SCALES`.
-- Streaming vs in-memory: Sheetra streaming, fast-csv streaming, ExcelJS in-memory/streaming, and SheetJS in-memory where practical.
+- Streaming vs in-memory: Sheetra raw streaming, Sheetra feature-enabled ingestion, fast-csv streaming, ExcelJS in-memory/streaming, and SheetJS in-memory where practical.
 - XLSX: generated XLSX files, formula-preserving workbooks, and multi-sheet files.
 - Shapes: tall datasets and wide datasets.
 - Transform complexity: no transform, light transform, and CPU-heavy transform.
@@ -23,6 +23,11 @@ npm run benchmark:strong
 - Parallel processing: worker-thread mapper runs with one worker and multiple workers.
 - Cold/warm behavior: first and second runs against the same file.
 - Real scenarios: CRM import, log export, financial formulas, and local file-size fixtures.
+
+Sheetra modes are intentionally split:
+
+- Raw mode: no type inference, no schema, no cleaning; closest comparison to stream-first parsers.
+- Feature-enabled mode: `inferTypes`, schema validation, cleaning, and issue collection where the suite is testing production ingestion behavior.
 
 Useful controls:
 
