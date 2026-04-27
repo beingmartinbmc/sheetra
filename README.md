@@ -81,14 +81,14 @@ Real local file benchmark:
 
 | File | Engine | Rows | Time | Peak memory |
 | --- | --- | ---: | ---: | ---: |
-| `Crime_Data_from_2020_to_2024.csv` 243.6MB | `sheetra:csv:stream` | 1,004,894 | 11,577ms | 123.9MB |
-| `Crime_Data_from_2020_to_2024.csv` 243.6MB | `fast-csv:stream` | 1,004,894 | 7,851ms | 128.1MB |
-| `MOCK_DATA.csv` 497.6KB | `sheetra:csv:stream` | 1,000 | 25ms | 129.1MB |
-| `MOCK_DATA.csv` 497.6KB | `sheetjs:xlsx:readFile` | 1,000 | 100ms | 152.0MB |
-| `MOCK_DATA.xlsx` 244.2KB | `sheetra:xlsx` | 1,000 | 143ms | 189.8MB |
-| `MOCK_DATA.xlsx` 244.2KB | `sheetjs:xlsx:readFile` | 1,000 | 72ms | 196.6MB |
-| `hts_2024_revision_9_xlsx.xlsx` 1.5MB | `sheetra:xlsx` | 35,808 | 1,060ms | 491.0MB |
-| `hts_2024_revision_9_xlsx.xlsx` 1.5MB | `sheetjs:xlsx:readFile` | 35,808 | 334ms | 579.8MB |
+| CSV fixture, 1,004,894 rows, 243.6MB | `sheetra:csv:stream` | 1,004,894 | 11,577ms | 123.9MB |
+| CSV fixture, 1,004,894 rows, 243.6MB | `fast-csv:stream` | 1,004,894 | 7,851ms | 128.1MB |
+| CSV fixture, 1,000 rows, 497.6KB | `sheetra:csv:stream` | 1,000 | 25ms | 129.1MB |
+| CSV fixture, 1,000 rows, 497.6KB | `sheetjs:xlsx:readFile` | 1,000 | 100ms | 152.0MB |
+| XLSX fixture, 1,000 rows, 244.2KB | `sheetra:xlsx` | 1,000 | 143ms | 189.8MB |
+| XLSX fixture, 1,000 rows, 244.2KB | `sheetjs:xlsx:readFile` | 1,000 | 72ms | 196.6MB |
+| XLSX fixture, 35,808 rows, 1.5MB | `sheetra:xlsx` | 35,808 | 1,060ms | 491.0MB |
+| XLSX fixture, 35,808 rows, 1.5MB | `sheetjs:xlsx:readFile` | 35,808 | 334ms | 579.8MB |
 
 Current interpretation:
 
@@ -111,6 +111,7 @@ The strong suite covers:
 
 - Scale runs from 100k through 2M+ rows.
 - Streaming vs in-memory modes for Sheetra, ExcelJS, SheetJS, and fast-csv.
+- Sheetra raw mode and feature-enabled mode: `inferTypes`, schema validation, cleaning, and issue collection are benchmarked separately from the raw streaming fast path.
 - XLSX read paths, multi-sheet workbooks, and formula-preserving files.
 - Tall data, wide data, light transforms, heavy transforms, and full read-validate-transform-write pipelines.
 - Fault tolerance with messy rows, invalid types, missing values, and issue collection.
