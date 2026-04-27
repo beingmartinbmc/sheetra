@@ -14,21 +14,21 @@ import { ensureCsvFixture, ensureXlsxFixture, limitFromEnv, scaleFromEnv, synthe
 import {
   drainExcelJsStreaming,
   drainFastCsv,
-  drainSheetraCsv,
+  drainPravaahCsv,
   readExcelJsInMemory,
   readSheetJs,
-  sheetraCsvEndToEnd,
+  pravaahCsvEndToEnd,
 } from "./lib/engines.js";
 import { type BenchmarkCase, measureCase, resultForConsole, writeJson, writeMarkdown } from "./lib/metrics.js";
 
-const profile = process.env.SHEETRA_BENCH_PROFILE ?? "quick";
+const profile = process.env.PRAVAAH_BENCH_PROFILE ?? "quick";
 const outputDir = join(process.cwd(), "benchmark", "results");
 const workDir = join(outputDir, "fixtures");
 const scales =
   profile === "full" ? scaleFromEnv([100_000, 500_000, 1_000_000, 2_000_000]) : scaleFromEnv([100_000, 500_000]);
-const xlsxRows = limitFromEnv("SHEETRA_BENCH_XLSX_ROWS", profile === "full" ? 50_000 : 10_000);
-const wideRows = limitFromEnv("SHEETRA_BENCH_WIDE_ROWS", profile === "full" ? 50_000 : 10_000);
-const memoryHeavyLimitBytes = Number(process.env.SHEETRA_BENCH_MEMORY_LIMIT_MB ?? 100) * 1024 * 1024;
+const xlsxRows = limitFromEnv("PRAVAAH_BENCH_XLSX_ROWS", profile === "full" ? 50_000 : 10_000);
+const wideRows = limitFromEnv("PRAVAAH_BENCH_WIDE_ROWS", profile === "full" ? 50_000 : 10_000);
+const memoryHeavyLimitBytes = Number(process.env.PRAVAAH_BENCH_MEMORY_LIMIT_MB ?? 100) * 1024 * 1024;
 
 await mkdir(workDir, { recursive: true });
 
@@ -65,12 +65,12 @@ async function scaleCases(): Promise<BenchmarkCase[]> {
     cases.push({
       suite: "scale",
       name: `${rows.toLocaleString()} rows x 10 columns`,
-      mode: "sheetra raw streaming",
+      mode: "pravaah raw streaming",
       format: "csv",
       rows,
       columns: 10,
       fileSizeBytes: size,
-      run: () => drainSheetraCsv(path),
+      run: () => drainPravaahCsv(path),
     });
     cases.push({
       suite: "scale",
@@ -94,27 +94,27 @@ async function modeCases(): Promise<BenchmarkCase[]> {
     {
       suite: "streaming-vs-memory",
       name: "CSV read",
-      mode: "sheetra raw streaming",
+      mode: "pravaah raw streaming",
       format: "csv",
       rows,
       columns: 10,
       fileSizeBytes: size,
-      run: () => drainSheetraCsv(path),
+      run: () => drainPravaahCsv(path),
     },
     {
       suite: "streaming-vs-memory",
       name: "CSV read",
-      mode: "sheetra inferTypes",
+      mode: "pravaah inferTypes",
       format: "csv",
       rows,
       columns: 10,
       fileSizeBytes: size,
-      run: () => drainSheetraCsv(path, undefined, { inferTypes: true }),
+      run: () => drainPravaahCsv(path, undefined, { inferTypes: true }),
     },
     {
       suite: "streaming-vs-memory",
       name: "CSV read",
-      mode: "sheetra schema+cleaning",
+      mode: "pravaah schema+cleaning",
       format: "csv",
       rows,
       columns: 10,
@@ -191,7 +191,7 @@ async function xlsxCases(): Promise<BenchmarkCase[]> {
     {
       suite: "xlsx",
       name: `${xlsxRows.toLocaleString()} rows x 10 columns`,
-      mode: "sheetra read",
+      mode: "pravaah read",
       format: "xlsx",
       rows: xlsxRows,
       columns: 10,
@@ -221,7 +221,7 @@ async function xlsxCases(): Promise<BenchmarkCase[]> {
     {
       suite: "xlsx",
       name: "multi-sheet workbook",
-      mode: "sheetra read first sheet",
+      mode: "pravaah read first sheet",
       format: "xlsx",
       rows: xlsxRows,
       columns: 10,
@@ -239,22 +239,22 @@ async function shapeCases(): Promise<BenchmarkCase[]> {
     {
       suite: "shape",
       name: "tall data",
-      mode: "sheetra raw streaming",
+      mode: "pravaah raw streaming",
       format: "csv",
       rows: tallRows,
       columns: 10,
       fileSizeBytes: (await stat(tall)).size,
-      run: () => drainSheetraCsv(tall),
+      run: () => drainPravaahCsv(tall),
     },
     {
       suite: "shape",
       name: "wide data",
-      mode: "sheetra raw streaming",
+      mode: "pravaah raw streaming",
       format: "csv",
       rows: wideRows,
       columns: 200,
       fileSizeBytes: (await stat(wide)).size,
-      run: () => drainSheetraCsv(wide),
+      run: () => drainPravaahCsv(wide),
     },
   ];
 }
@@ -266,12 +266,12 @@ async function transformCases(): Promise<BenchmarkCase[]> {
   return (["none", "light", "heavy"] as const).map((level) => ({
     suite: "transform",
     name: `${level} transform`,
-    mode: "sheetra raw streaming",
+    mode: "pravaah raw streaming",
     format: "csv",
     rows,
     columns: 20,
     fileSizeBytes: size,
-    run: () => drainSheetraCsv(path, (row) => transformRow(row, level)),
+    run: () => drainPravaahCsv(path, (row) => transformRow(row, level)),
   }));
 }
 
@@ -306,7 +306,7 @@ async function faultToleranceCases(): Promise<BenchmarkCase[]> {
 }
 
 async function workerCases(): Promise<BenchmarkCase[]> {
-  const rows = limitFromEnv("SHEETRA_BENCH_WORKER_ROWS", profile === "full" ? 100_000 : 25_000);
+  const rows = limitFromEnv("PRAVAAH_BENCH_WORKER_ROWS", profile === "full" ? 100_000 : 25_000);
   const data = [...syntheticRows({ rows, columns: 10 })];
   const mapper = `(row) => {
     const amount = Number(row.amount || 0);
@@ -314,7 +314,7 @@ async function workerCases(): Promise<BenchmarkCase[]> {
     for (let index = 0; index < 75; index += 1) score += Math.sqrt(amount + index);
     return { ...row, score };
   }`;
-  return [1, Math.min(4, Math.max(2, Number(process.env.SHEETRA_BENCH_WORKERS ?? 4)))].map((workers) => ({
+  return [1, Math.min(4, Math.max(2, Number(process.env.PRAVAAH_BENCH_WORKERS ?? 4)))].map((workers) => ({
     suite: "parallel",
     name: "heavy row mapper",
     mode: `${workers} worker${workers === 1 ? "" : "s"}`,
@@ -333,22 +333,22 @@ async function coldWarmCases(): Promise<BenchmarkCase[]> {
     {
       suite: "cold-warm",
       name: "first run",
-      mode: "sheetra raw streaming",
+      mode: "pravaah raw streaming",
       format: "csv",
       rows,
       columns: 10,
       fileSizeBytes: size,
-      run: () => drainSheetraCsv(path),
+      run: () => drainPravaahCsv(path),
     },
     {
       suite: "cold-warm",
       name: "second run",
-      mode: "sheetra raw streaming",
+      mode: "pravaah raw streaming",
       format: "csv",
       rows,
       columns: 10,
       fileSizeBytes: size,
-      run: () => drainSheetraCsv(path),
+      run: () => drainPravaahCsv(path),
     },
   ];
 }
@@ -394,7 +394,7 @@ async function scenarioCases(): Promise<BenchmarkCase[]> {
       rows,
       columns: 30,
       fileSizeBytes: (await stat(logs)).size,
-      run: () => sheetraCsvEndToEnd(logs, join(workDir, "scenario-logs-out.csv"), (row) => transformRow(row, "heavy")),
+      run: () => pravaahCsvEndToEnd(logs, join(workDir, "scenario-logs-out.csv"), (row) => transformRow(row, "heavy")),
     },
     {
       suite: "scenario",
@@ -427,7 +427,7 @@ async function fileSizeCases(): Promise<BenchmarkCase[]> {
     cases.push({
       suite: "file-size",
       name: basename(file),
-      mode: "sheetra",
+      mode: "pravaah",
       format: extension === ".csv" ? "csv" : "xlsx",
       rows: 0,
       columns: 0,

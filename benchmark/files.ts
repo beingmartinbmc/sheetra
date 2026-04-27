@@ -16,10 +16,10 @@ interface BenchmarkRow {
 }
 
 const fixtureDir = join(process.cwd(), "benchmark", "files");
-const selectedFile = process.env.SHEETRA_BENCH_FILE;
-const rowLimit = Number(process.env.SHEETRA_BENCH_LIMIT ?? 0);
-const includeMemoryHeavy = process.env.SHEETRA_BENCH_INCLUDE_MEMORY === "1";
-const memoryHeavyLimitBytes = Number(process.env.SHEETRA_BENCH_MEMORY_LIMIT_MB ?? 50) * 1024 * 1024;
+const selectedFile = process.env.PRAVAAH_BENCH_FILE;
+const rowLimit = Number(process.env.PRAVAAH_BENCH_LIMIT ?? 0);
+const includeMemoryHeavy = process.env.PRAVAAH_BENCH_INCLUDE_MEMORY === "1";
+const memoryHeavyLimitBytes = Number(process.env.PRAVAAH_BENCH_MEMORY_LIMIT_MB ?? 50) * 1024 * 1024;
 
 const files = await discoverFiles();
 const results: BenchmarkRow[] = [];
@@ -30,12 +30,12 @@ for (const file of files) {
   const extension = extname(file).toLowerCase();
 
   if (extension === ".csv") {
-    results.push(await measure(label, fileStat.size, "sheetra:csv:stream", () => drainSheetra(file)));
+    results.push(await measure(label, fileStat.size, "pravaah:csv:stream", () => drainPravaah(file)));
     results.push(await measure(label, fileStat.size, "fast-csv:stream", () => drainFastCsv(file)));
   }
 
   if (extension === ".xlsx") {
-    results.push(await measure(label, fileStat.size, "sheetra:xlsx", () => drainSheetra(file)));
+    results.push(await measure(label, fileStat.size, "pravaah:xlsx", () => drainPravaah(file)));
   }
 
   if ([".csv", ".xlsx"].includes(extension)) {
@@ -66,7 +66,7 @@ async function discoverFiles(): Promise<string[]> {
     .filter((file) => selectedFile === undefined || basename(file) === selectedFile);
 }
 
-async function drainSheetra(file: string): Promise<number> {
+async function drainPravaah(file: string): Promise<number> {
   const pipeline = read(file);
   const stats = rowLimit > 0 ? await pipeline.take(rowLimit).drain() : await pipeline.drain();
   return stats.rowsProcessed;
@@ -137,7 +137,7 @@ async function memoryHeavy(
       rows: "skipped",
       timeMs: "skipped",
       peakMemory: "n/a",
-      notes: `set SHEETRA_BENCH_INCLUDE_MEMORY=1 to run files over ${formatBytes(memoryHeavyLimitBytes)}`,
+      notes: `set PRAVAAH_BENCH_INCLUDE_MEMORY=1 to run files over ${formatBytes(memoryHeavyLimitBytes)}`,
     };
   }
 

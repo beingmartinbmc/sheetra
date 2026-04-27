@@ -768,12 +768,12 @@ function appXml(sheetNames: string[]): string {
   const parts = sheetNames.map((sheetName) => `<vt:lpstr>${escapeXml(sheetName)}</vt:lpstr>`).join("");
   return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <Properties xmlns="http://schemas.openxmlformats.org/officeDocument/2006/extended-properties">
-  <Application>Sheetra</Application><TitlesOfParts><vt:vector xmlns:vt="http://schemas.openxmlformats.org/officeDocument/2006/docPropsVTypes" size="${sheetNames.length}" baseType="lpstr">${parts}</vt:vector></TitlesOfParts>
+  <Application>Pravaah</Application><TitlesOfParts><vt:vector xmlns:vt="http://schemas.openxmlformats.org/officeDocument/2006/docPropsVTypes" size="${sheetNames.length}" baseType="lpstr">${parts}</vt:vector></TitlesOfParts>
 </Properties>`;
 }
 
 function coreXml(properties: Record<string, string> = {}): string {
-  const creator = properties.creator ?? "Sheetra";
+  const creator = properties.creator ?? "Pravaah";
   return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <cp:coreProperties xmlns:cp="http://schemas.openxmlformats.org/package/2006/metadata/core-properties" xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:dcterms="http://purl.org/dc/terms/">
   <dc:creator>${escapeXml(creator)}</dc:creator><dcterms:created>${properties.created ?? new Date().toISOString()}</dcterms:created>

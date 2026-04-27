@@ -1,5 +1,5 @@
 import { writeFile } from "node:fs/promises";
-import type { CellValue, CleaningOptions, Row, RowContext, SheetraIssue, ValidationMode } from "../types.js";
+import type { CellValue, CleaningOptions, Row, RowContext, PravaahIssue, ValidationMode } from "../types.js";
 
 export type FieldKind = "string" | "number" | "boolean" | "date" | "email" | "phone" | "any";
 
@@ -38,9 +38,9 @@ export interface ValidationOptions {
   cleaning?: CleaningOptions;
 }
 
-export class SheetraValidationError extends Error {
-  constructor(public readonly issues: SheetraIssue[]) {
-    super(`Sheetra validation failed with ${issues.length} issue${issues.length === 1 ? "" : "s"}`);
+export class PravaahValidationError extends Error {
+  constructor(public readonly issues: PravaahIssue[]) {
+    super(`Pravaah validation failed with ${issues.length} issue${issues.length === 1 ? "" : "s"}`);
   }
 }
 
@@ -139,8 +139,8 @@ export function validateRow<T extends SchemaDefinition>(
   row: Row,
   definition: T,
   context: RowContext,
-): { value?: InferSchema<T>; issues: SheetraIssue[] } {
-  const issues: SheetraIssue[] = [];
+): { value?: InferSchema<T>; issues: PravaahIssue[] } {
+  const issues: PravaahIssue[] = [];
   const parsed: Record<string, unknown> = {};
 
   for (const [key, rawDefinition] of Object.entries(definition)) {
@@ -180,9 +180,9 @@ export function validateRows<T extends SchemaDefinition>(
   rows: Iterable<Row>,
   definition: T,
   options: ValidationOptions = {},
-): { rows: InferSchema<T>[]; issues: SheetraIssue[] } {
+): { rows: InferSchema<T>[]; issues: PravaahIssue[] } {
   const output: InferSchema<T>[] = [];
-  const issues: SheetraIssue[] = [];
+  const issues: PravaahIssue[] = [];
   let rowNumber = 1;
 
   for (const row of rows) {
@@ -192,7 +192,7 @@ export function validateRows<T extends SchemaDefinition>(
       output.push(result.value);
     } else {
       issues.push(...result.issues);
-      if (options.mode === "fail-fast") throw new SheetraValidationError(result.issues);
+      if (options.mode === "fail-fast") throw new PravaahValidationError(result.issues);
     }
     rowNumber += 1;
   }
@@ -200,7 +200,7 @@ export function validateRows<T extends SchemaDefinition>(
   return { rows: output, issues };
 }
 
-export async function writeIssueReport(issues: Iterable<SheetraIssue>, destination: string): Promise<void> {
+export async function writeIssueReport(issues: Iterable<PravaahIssue>, destination: string): Promise<void> {
   const rows = [
     ["severity", "code", "message", "rowNumber", "column", "expected", "rawValue"],
     ...[...issues].map((issue) => [
@@ -255,7 +255,7 @@ function issue(
   column: string,
   rawValue: unknown,
   expected: string,
-): SheetraIssue {
+): PravaahIssue {
   return {
     code,
     message,

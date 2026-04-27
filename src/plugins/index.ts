@@ -1,10 +1,10 @@
-import type { CellValue, Row, SheetraIssue } from "../types.js";
+import type { CellValue, Row, PravaahIssue } from "../types.js";
 
 export type ParserPlugin = (value: unknown, column: string, row: Row) => CellValue | undefined;
-export type ValidatorPlugin = (row: Row) => SheetraIssue[];
+export type ValidatorPlugin = (row: Row) => PravaahIssue[];
 export type ExporterPlugin = (rows: AsyncIterable<Row>, destination: string) => Promise<void>;
 
-export interface SheetraPlugin {
+export interface PravaahPlugin {
   name: string;
   parsers?: Record<string, ParserPlugin>;
   validators?: ValidatorPlugin[];
@@ -13,19 +13,19 @@ export interface SheetraPlugin {
 }
 
 export class PluginRegistry {
-  private readonly plugins = new Map<string, SheetraPlugin>();
+  private readonly plugins = new Map<string, PravaahPlugin>();
 
-  use(plugin: SheetraPlugin): this {
+  use(plugin: PravaahPlugin): this {
     if (this.plugins.has(plugin.name)) throw new Error(`Plugin already registered: ${plugin.name}`);
     this.plugins.set(plugin.name, plugin);
     return this;
   }
 
-  list(): SheetraPlugin[] {
+  list(): PravaahPlugin[] {
     return [...this.plugins.values()];
   }
 
-  formulas(): NonNullable<SheetraPlugin["formulas"]> {
+  formulas(): NonNullable<PravaahPlugin["formulas"]> {
     return Object.assign({}, ...this.list().map((plugin) => plugin.formulas ?? {}));
   }
 
@@ -33,11 +33,11 @@ export class PluginRegistry {
     return this.list().flatMap((plugin) => plugin.validators ?? []);
   }
 
-  validate(row: Row): SheetraIssue[] {
+  validate(row: Row): PravaahIssue[] {
     return this.validators().flatMap((validator) => validator(row));
   }
 
-  validateRows(rows: Iterable<Row>): SheetraIssue[] {
+  validateRows(rows: Iterable<Row>): PravaahIssue[] {
     return [...rows].flatMap((row) => this.validate(row));
   }
 }

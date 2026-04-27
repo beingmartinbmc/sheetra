@@ -3,7 +3,7 @@ export type CellValue = unknown;
 export type Row = Record<string, unknown>;
 export type RowLike = Row | unknown[];
 
-export type SheetraFormat = "xlsx" | "csv" | "json";
+export type PravaahFormat = "xlsx" | "csv" | "json";
 export type ValidationMode = "fail-fast" | "collect" | "skip";
 
 export interface RowContext {
@@ -12,7 +12,7 @@ export interface RowContext {
   source?: string;
 }
 
-export interface SheetraIssue {
+export interface PravaahIssue {
   code: string;
   message: string;
   rowNumber?: number;
@@ -42,7 +42,7 @@ export interface CleaningOptions {
 }
 
 export interface ReadOptions {
-  format?: SheetraFormat;
+  format?: PravaahFormat;
   sheet?: string | number;
   headers?: boolean | string[];
   delimiter?: string;
@@ -53,7 +53,7 @@ export interface ReadOptions {
 }
 
 export interface WriteOptions {
-  format?: SheetraFormat;
+  format?: PravaahFormat;
   sheetName?: string;
   headers?: string[];
   delimiter?: string;
@@ -61,7 +61,7 @@ export interface WriteOptions {
 
 export interface ProcessResult<T = Row> {
   rows: T[];
-  issues: SheetraIssue[];
+  issues: PravaahIssue[];
   stats: ProcessStats;
 }
 
