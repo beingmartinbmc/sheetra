@@ -14,10 +14,12 @@ export async function query(source: QueryOptions["source"], sql: string): Promis
   for await (const row of rows) {
     if (plan.where === undefined || matchesWhere(row as Row, plan.where)) {
       output.push(project(row as Row, plan.columns));
+      if (plan.orderBy === undefined && plan.limit !== undefined && output.length >= plan.limit) break;
     }
   }
 
-  return output;
+  const ordered = plan.orderBy === undefined ? output : sortRows(output, plan.orderBy);
+  return plan.limit === undefined ? ordered : ordered.slice(0, plan.limit);
 }
 
 export function createIndex(rows: Iterable<Row>, key: string | string[]): Map<string, Row[]> {
@@ -50,6 +52,8 @@ export function joinRows(left: Iterable<Row>, right: Iterable<Row>, key: string 
 interface QueryPlan {
   columns: string[];
   where?: WhereClause | undefined;
+  orderBy?: OrderByClause | undefined;
+  limit?: number | undefined;
 }
 
 interface WhereClause {
@@ -58,14 +62,31 @@ interface WhereClause {
   value: string | number;
 }
 
+interface OrderByClause {
+  column: string;
+  direction: "asc" | "desc";
+}
+
 function parseQuery(sql: string): QueryPlan {
-  const match = /^select\s+(.+?)(?:\s+where\s+(.+))?$/i.exec(sql.trim());
+  const match = /^select\s+(.+?)(?:\s+where\s+(.+?))?(?:\s+order\s+by\s+([A-Za-z_][\w\s.-]*?)(?:\s+(asc|desc))?)?(?:\s+limit\s+(\d+))?$/i.exec(
+    sql.trim(),
+  );
   if (match === null) throw new Error(`Unsupported query: ${sql}`);
 
   const select = match[1] ?? "*";
   const where = match[2];
+  const orderColumn = match[3];
+  const limit = match[5] === undefined ? undefined : Number(match[5]);
   const columns = select.trim() === "*" ? ["*"] : select.split(",").map((column) => column.trim());
-  return where === undefined ? { columns } : { columns, where: parseWhere(where) };
+  return {
+    columns,
+    where: where === undefined ? undefined : parseWhere(where),
+    orderBy:
+      orderColumn === undefined
+        ? undefined
+        : { column: orderColumn.trim(), direction: (match[4]?.toLowerCase() as "asc" | "desc" | undefined) ?? "asc" },
+    limit,
+  };
 }
 
 function parseWhere(where: string): WhereClause {
@@ -103,4 +124,14 @@ function matchesWhere(row: Row, where: WhereClause): boolean {
 function project(row: Row, columns: string[]): Row {
   if (columns.length === 1 && columns[0] === "*") return row;
   return Object.fromEntries(columns.map((column) => [column, row[column] ?? null]));
+}
+
+function sortRows(rows: Row[], orderBy: OrderByClause): Row[] {
+  return [...rows].sort((left, right) => {
+    const a = left[orderBy.column];
+    const b = right[orderBy.column];
+    const direction = orderBy.direction === "asc" ? 1 : -1;
+    if (typeof a === "number" && typeof b === "number") return (a - b) * direction;
+    return String(a ?? "").localeCompare(String(b ?? "")) * direction;
+  });
 }

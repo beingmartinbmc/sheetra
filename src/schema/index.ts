@@ -1,3 +1,4 @@
+import { writeFile } from "node:fs/promises";
 import type { CellValue, CleaningOptions, Row, RowContext, SheetraIssue, ValidationMode } from "../types.js";
 
 export type FieldKind = "string" | "number" | "boolean" | "date" | "email" | "phone" | "any";
@@ -112,6 +113,28 @@ export function cleanRow(row: Row, options: CleaningOptions = {}): Row {
   return cleaned;
 }
 
+export function cleanRows(rows: Iterable<Row>, options: CleaningOptions = {}): Row[] {
+  const seen = new Set<string>();
+  const output: Row[] = [];
+
+  for (const row of rows) {
+    const cleaned = cleanRow(row, options);
+    if (options.dedupeKey === undefined) {
+      output.push(cleaned);
+      continue;
+    }
+
+    const keys = Array.isArray(options.dedupeKey) ? options.dedupeKey : [options.dedupeKey];
+    const identity = keys.map((key) => String(cleaned[key] ?? "")).join("\u0000");
+    if (!seen.has(identity)) {
+      seen.add(identity);
+      output.push(cleaned);
+    }
+  }
+
+  return output;
+}
+
 export function validateRow<T extends SchemaDefinition>(
   row: Row,
   definition: T,
@@ -177,6 +200,23 @@ export function validateRows<T extends SchemaDefinition>(
   return { rows: output, issues };
 }
 
+export async function writeIssueReport(issues: Iterable<SheetraIssue>, destination: string): Promise<void> {
+  const rows = [
+    ["severity", "code", "message", "rowNumber", "column", "expected", "rawValue"],
+    ...[...issues].map((issue) => [
+      issue.severity,
+      issue.code,
+      issue.message,
+      issue.rowNumber ?? "",
+      issue.column ?? "",
+      issue.expected ?? "",
+      stringifyIssueValue(issue.rawValue),
+    ]),
+  ];
+
+  await writeFile(destination, rows.map((row) => row.map(csvEscape).join(",")).join("\n") + "\n");
+}
+
 function coerceValue(value: unknown, field: FieldDefinition): { ok: true; value: unknown } | { ok: false } {
   if (field.kind === "any") return { ok: true, value };
   if (field.kind === "string") return { ok: true, value: String(value) };
@@ -225,4 +265,15 @@ function issue(
     expected,
     severity: "error",
   };
+}
+
+function stringifyIssueValue(value: unknown): string {
+  if (value instanceof Date) return value.toISOString();
+  if (typeof value === "object" && value !== null) return JSON.stringify(value);
+  return String(value ?? "");
+}
+
+function csvEscape(value: unknown): string {
+  const text = String(value);
+  return /[",\n]/.test(text) ? `"${text.replace(/"/g, "\"\"")}"` : text;
 }
