@@ -81,8 +81,17 @@ describe("Sheetra pipeline", () => {
     const raw = await readFile(file, "utf8");
 
     expect(raw).toContain("name,score");
-    expect(rows).toEqual([{ name: "Ada", score: 10 }]);
+    expect(rows).toEqual([{ name: "Ada", score: "10" }]);
     await rm(dir, { recursive: true, force: true });
+  });
+
+  it("can infer CSV primitive values when requested", async () => {
+    const rows = await read(Buffer.from("name,score,active\nAda,10,true\n"), {
+      format: "csv",
+      inferTypes: true,
+    }).collect();
+
+    expect(rows).toEqual([{ name: "Ada", score: 10, active: true }]);
   });
 
   it("round-trips basic XLSX files", async () => {

@@ -46,6 +46,7 @@ export interface ReadOptions {
   sheet?: string | number;
   headers?: boolean | string[];
   delimiter?: string;
+  inferTypes?: boolean;
   formulas?: "values" | "preserve";
   validation?: ValidationMode;
   cleaning?: CleaningOptions;
