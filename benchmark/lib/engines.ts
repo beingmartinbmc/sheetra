@@ -42,7 +42,7 @@ export async function readExcelJsInMemory(path: string): Promise<number> {
   return workbook.worksheets.reduce((total, sheet) => total + Math.max(0, sheet.rowCount - 1), 0);
 }
 
-export async function readExcelJsStreaming(path: string): Promise<number> {
+export async function drainExcelJsStreaming(path: string): Promise<number> {
   if (path.endsWith(".csv")) return drainFastCsv(path);
 
   const workbook = new ExcelJS.stream.xlsx.WorkbookReader(path, {
