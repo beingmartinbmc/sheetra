@@ -108,7 +108,12 @@ interface EngineSpec {
 
 function enginesFor(extension: string): EngineSpec[] {
   if (extension === ".csv") {
-    return [{ name: "sheetra" }, { name: "fastcsv" }, { name: "sheetjs", heavy: true }];
+    return [
+      { name: "sheetra-raw-drain" },
+      { name: "sheetra-row-parse" },
+      { name: "fastcsv" },
+      { name: "sheetjs", heavy: true },
+    ];
   }
   return [{ name: "sheetra" }, { name: "sheetjs" }, { name: "exceljs" }];
 }
