@@ -513,20 +513,20 @@ Environment used for the published numbers:
 
 ### Read Throughput
 
-```mermaid
-xychart-beta
-  title "CSV Read: 1M Rows, 244MB - Lower Is Better"
-  x-axis ["Pravaah", "fast-csv", "SheetJS"]
-  y-axis "Seconds" 0 --> 9
-  bar [1.90, 8.57, 7.47]
+```text
+CSV Read: 1M Rows, 244MB (seconds, lower is better)
+
+Pravaah  | ####                  1.90s
+SheetJS  | ################      7.47s
+fast-csv | ##################    8.57s
 ```
 
-```mermaid
-xychart-beta
-  title "XLSX Read: 36K Rows, 1.5MB - Lower Is Better"
-  x-axis ["Pravaah", "SheetJS", "ExcelJS"]
-  y-axis "Seconds" 0 --> 0.7
-  bar [0.390, 0.431, 0.575]
+```text
+XLSX Read: 36K Rows, 1.5MB (seconds, lower is better)
+
+Pravaah | #############          0.390s
+SheetJS | ###############        0.431s
+ExcelJS | ####################   0.575s
 ```
 
 | Workload | Engine | Time | Peak RSS |
@@ -545,20 +545,20 @@ For count-only CSV probes, `read(csv).drain()` scanned 1M rows / 244MB in **760m
 
 ### Write Throughput
 
-```mermaid
-xychart-beta
-  title "CSV Write: 100K Rows - Lower Is Better"
-  x-axis ["Pravaah", "fast-csv", "SheetJS"]
-  y-axis "Milliseconds" 0 --> 550
-  bar [141, 126, 483]
+```text
+CSV Write: 100K Rows (milliseconds, lower is better)
+
+fast-csv | #####                 126ms
+Pravaah  | ######                141ms
+SheetJS  | ####################  483ms
 ```
 
-```mermaid
-xychart-beta
-  title "XLSX Write: 100K Rows - Lower Is Better"
-  x-axis ["Pravaah", "SheetJS", "ExcelJS"]
-  y-axis "Milliseconds" 0 --> 2000
-  bar [710, 755, 1846]
+```text
+XLSX Write: 100K Rows (milliseconds, lower is better)
+
+Pravaah | ########               710ms
+SheetJS | ########               755ms
+ExcelJS | ####################   1,846ms
 ```
 
 | Workload | Engine | Time | Peak RSS |
@@ -572,20 +572,20 @@ xychart-beta
 
 ### Memory Comparison
 
-```mermaid
-xychart-beta
-  title "Peak RSS: CSV Read 1M Rows - Lower Is Better"
-  x-axis ["Pravaah", "fast-csv", "SheetJS"]
-  y-axis "MB" 0 --> 3500
-  bar [110, 149, 3413]
+```text
+Peak RSS: CSV Read 1M Rows (MB, lower is better)
+
+Pravaah  | #                     110MB
+fast-csv | #                     149MB
+SheetJS  | ####################  3,413MB
 ```
 
-```mermaid
-xychart-beta
-  title "Peak RSS: XLSX Write 100K Rows - Lower Is Better"
-  x-axis ["Pravaah", "SheetJS", "ExcelJS"]
-  y-axis "MB" 0 --> 1100
-  bar [222, 451, 1075]
+```text
+Peak RSS: XLSX Write 100K Rows (MB, lower is better)
+
+Pravaah | ####                  222MB
+SheetJS | ########              451MB
+ExcelJS | ####################  1,075MB
 ```
 
 ### Benchmark Summary
