@@ -2,7 +2,20 @@ import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { describe, expect, it } from "vitest";
-import { diff, evaluateFormula, query, read, schema, workerMap, write } from "../src/index.js";
+import {
+  diff,
+  evaluateFormula,
+  formula,
+  query,
+  read,
+  readWorkbook,
+  schema,
+  workbook,
+  workerMap,
+  worksheet,
+  write,
+  writeWorkbook,
+} from "../src/index.js";
 
 describe("Sheetra pipeline", () => {
   it("maps, filters, and collects rows", async () => {
@@ -60,6 +73,37 @@ describe("Sheetra pipeline", () => {
     const rows = await read(file).collect();
 
     expect(rows).toEqual([{ name: "Ada", score: 10 }]);
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  it("round-trips multi-sheet workbooks with formulas and sheet metadata", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "sheetra-"));
+    const file = join(dir, "book.xlsx");
+    const summary = worksheet("Summary", [{ label: "Total", total: formula("SUM(B2:B3)", 30) }]);
+    summary.merges.push("A1:B1");
+    summary.validations.push({ range: "B2:B10", type: "whole", formula: "0" });
+    summary.tables.push({ name: "SummaryTable", range: "A1:B2", columns: ["label", "total"] });
+    summary.frozen = { ySplit: 1, topLeftCell: "A2" };
+
+    await writeWorkbook(
+      workbook([
+        worksheet("Data", [
+          { name: "Ada", score: 10 },
+          { name: "Grace", score: 20 },
+        ]),
+        summary,
+      ]),
+      file,
+    );
+
+    const book = await readWorkbook(file, { formulas: "preserve" });
+
+    expect(book.sheets.map((sheet) => sheet.name)).toEqual(["Data", "Summary"]);
+    expect(book.sheets[0]?.rows).toEqual([
+      { name: "Ada", score: 10 },
+      { name: "Grace", score: 20 },
+    ]);
+    expect(book.sheets[1]?.rows[0]?.total).toEqual({ formula: "SUM(B2:B3)", result: 30 });
     await rm(dir, { recursive: true, force: true });
   });
 });
