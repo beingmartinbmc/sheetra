@@ -107,6 +107,26 @@ export class SheetraPipeline<T = Row> implements AsyncIterable<T> {
     return { rows, issues, stats: finishStats(stats) };
   }
 
+  async drain(): Promise<ProcessStats> {
+    const stats = createStats();
+
+    try {
+      for await (const row of this) {
+        void row;
+        stats.rowsProcessed += 1;
+        observeMemory(stats);
+      }
+    } catch (error) {
+      if (error instanceof SheetraValidationError) {
+        stats.errors += error.issues.length;
+      } else {
+        throw error;
+      }
+    }
+
+    return finishStats(stats);
+  }
+
   async write(destination: string, options: WriteOptions = {}): Promise<ProcessStats> {
     return write(this as AsyncIterable<RowLike>, destination, options);
   }
