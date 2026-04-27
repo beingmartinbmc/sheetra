@@ -11,34 +11,64 @@ export interface PipelineFastPaths<T> {
   collect?: () => Promise<T[]>;
 }
 
+type FusedOp<T, U> =
+  | { kind: "map"; fn: (row: T, index: number) => U | Promise<U> }
+  | { kind: "filter"; fn: (row: T, index: number) => boolean | Promise<boolean> };
+
 export class SheetraPipeline<T = Row> implements AsyncIterable<T> {
+  private readonly pendingOps: FusedOp<unknown, unknown>[] = [];
+
   constructor(
     private readonly source: () => AsyncIterable<T>,
     private readonly fastPaths: PipelineFastPaths<T> = {},
   ) {}
 
   [Symbol.asyncIterator](): AsyncIterator<T> {
-    return this.source()[Symbol.asyncIterator]();
+    return this.buildIterator()[Symbol.asyncIterator]();
+  }
+
+  private buildIterator(): AsyncIterable<T> {
+    if (this.pendingOps.length === 0) return this.source();
+
+    const ops = [...this.pendingOps];
+    const src = this.source;
+
+    return {
+      async *[Symbol.asyncIterator]() {
+        let index = 0;
+        outer:
+        for await (const raw of src()) {
+          let current: unknown = raw;
+          for (const op of ops) {
+            if (op.kind === "map") {
+              current = await (op.fn as (row: unknown, i: number) => unknown)(current, index);
+            } else {
+              const keep = await (op.fn as (row: unknown, i: number) => boolean | Promise<boolean>)(current, index);
+              if (!keep) {
+                index += 1;
+                continue outer;
+              }
+            }
+          }
+          yield current as T;
+          index += 1;
+        }
+      },
+    };
   }
 
   map<U>(mapper: (row: T, index: number) => U | Promise<U>): SheetraPipeline<U> {
-    return new SheetraPipeline(async function* (this: SheetraPipeline<T>) {
-      let index = 0;
-      for await (const row of this) {
-        yield mapper(row, index);
-        index += 1;
-      }
-    }.bind(this));
+    const next = new SheetraPipeline<U>(this.source as unknown as () => AsyncIterable<U>);
+    next.pendingOps.push(...this.pendingOps);
+    next.pendingOps.push({ kind: "map", fn: mapper as unknown as (row: unknown, index: number) => unknown });
+    return next;
   }
 
   filter(predicate: (row: T, index: number) => boolean | Promise<boolean>): SheetraPipeline<T> {
-    return new SheetraPipeline(async function* (this: SheetraPipeline<T>) {
-      let index = 0;
-      for await (const row of this) {
-        if (await predicate(row, index)) yield row;
-        index += 1;
-      }
-    }.bind(this));
+    const next = new SheetraPipeline<T>(this.source);
+    next.pendingOps.push(...this.pendingOps);
+    next.pendingOps.push({ kind: "filter", fn: predicate as unknown as (row: unknown, index: number) => boolean | Promise<boolean> });
+    return next;
   }
 
   clean(options: NonNullable<ReadOptions["cleaning"]>): SheetraPipeline<T> {
@@ -49,9 +79,10 @@ export class SheetraPipeline<T = Row> implements AsyncIterable<T> {
     definition: S,
     options: Pick<ReadOptions, "validation" | "cleaning"> = {},
   ): SheetraPipeline<InferSchema<S>> {
-    return new SheetraPipeline(async function* (this: SheetraPipeline<T>) {
+    const iterate = () => this.buildIterator();
+    return new SheetraPipeline(async function* () {
       let rowNumber = 1;
-      for await (const row of this) {
+      for await (const row of iterate()) {
         if (!isRow(row)) {
           throw new SheetraValidationError([
             {
@@ -74,22 +105,23 @@ export class SheetraPipeline<T = Row> implements AsyncIterable<T> {
         }
         rowNumber += 1;
       }
-    }.bind(this));
+    });
   }
 
   take(limit: number): SheetraPipeline<T> {
-    return new SheetraPipeline(async function* (this: SheetraPipeline<T>) {
+    const iterate = () => this.buildIterator();
+    return new SheetraPipeline(async function* () {
       let count = 0;
-      for await (const row of this) {
+      for await (const row of iterate()) {
         if (count >= limit) break;
         yield row;
         count += 1;
       }
-    }.bind(this));
+    });
   }
 
   async collect(): Promise<T[]> {
-    if (this.fastPaths.collect !== undefined) return this.fastPaths.collect();
+    if (this.pendingOps.length === 0 && this.fastPaths.collect !== undefined) return this.fastPaths.collect();
     const rows: T[] = [];
     for await (const row of this) rows.push(row);
     return rows;
@@ -119,7 +151,7 @@ export class SheetraPipeline<T = Row> implements AsyncIterable<T> {
   }
 
   async drain(): Promise<ProcessStats> {
-    if (this.fastPaths.drain !== undefined) return this.fastPaths.drain();
+    if (this.pendingOps.length === 0 && this.fastPaths.drain !== undefined) return this.fastPaths.drain();
     const stats = createStats();
 
     try {
