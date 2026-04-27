@@ -17,6 +17,13 @@ describe("Sheetra pipeline", () => {
     expect(rows).toEqual([{ name: "Ada", score: 10, total: 20 }]);
   });
 
+  it("drains rows without collecting them", async () => {
+    const stats = await read([{ id: 1 }, { id: 2 }]).drain();
+
+    expect(stats.rowsProcessed).toBe(2);
+    expect(stats.durationMs).toBeGreaterThanOrEqual(0);
+  });
+
   it("validates and cleans typed rows", async () => {
     const rows = await read([{ "E-mail": " ada@example.com ", age: "42", joined: "2026-01-01" }])
       .clean({ trim: true, fuzzyHeaders: { email: ["E-mail"] } })
