@@ -1,6 +1,6 @@
 export { read, write, parse, SheetraPipeline } from "./pipeline/index.js";
 export { readCsv, writeCsv, inferCsv } from "./csv/index.js";
-export { readXlsx, writeXlsx, workbook, worksheet } from "./xlsx/index.js";
+export { readXlsx, writeXlsx, readWorkbook, writeWorkbook, workbook, worksheet, cell, formula } from "./xlsx/index.js";
 export { schema, validateRow, validateRows, cleanRow, normalizeHeader, SheetraValidationError } from "./schema/index.js";
 export { FormulaEngine, evaluateFormula } from "./formula/index.js";
 export { query, createIndex, joinRows } from "./query/index.js";
