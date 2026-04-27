@@ -131,11 +131,13 @@ This suite answers a practical question:
 
 ### Real File, 1M Rows, 244MB CSV
 
-| Engine | Time | Peak Memory |
+Each engine runs in its own fresh Node process via `npm run benchmark:isolated`. RSS is sampled every 25ms; numbers below are best-of-two on the same machine.
+
+| Engine | Time | Peak RSS |
 | --- | ---: | ---: |
-| `sheetra:csv:stream` | 8.6s | 143MB |
-| `fast-csv:stream` | 8.7s | 147MB |
-| `sheetjs:xlsx:readFile` | 7.5s | 3.4GB |
+| `sheetra:csv:stream` | 8.36s | 140MB |
+| `fast-csv:stream` | 8.59s | 156MB |
+| `sheetjs:xlsx:readFile` | 7.25s | 3.42GB |
 
 Sheetra is at parity with fast-csv on raw streaming throughput at this scale, while keeping the data-pipeline ergonomics (`map`, `filter`, `clean`, `schema`, `write`) and constant low memory.
 
@@ -147,12 +149,15 @@ When no transforms are applied to a CSV pipeline, `read(...).drain()` and `read(
 
 ### XLSX, Current State
 
-| Engine | Rows | Time | Peak Memory |
-| --- | ---: | ---: | ---: |
-| `sheetra:xlsx` | 35,808 | 1.14s | n/a |
-| `sheetjs:xlsx:readFile` | 35,808 | 363ms | 567MB |
+35,808 rows / 1.5MB workbook via `npm run benchmark:isolated`. Each engine in a fresh Node process, RSS sampled every 25ms, best-of-two.
 
-XLSX support is functional and feature-rich. Single-sheet reads now skip parsing the rest of the workbook and assemble rows with a tight loop, but the worksheet XML is still parsed into a full DOM tree before iteration. Switching the worksheet path to a SAX-style streaming parser is the next planned XLSX optimization.
+| Engine | Time | Peak RSS |
+| --- | ---: | ---: |
+| `sheetra:xlsx` | 1.09s | 445MB |
+| `exceljs:xlsx:readFile` | 586ms | 299MB |
+| `sheetjs:xlsx:readFile` | 428ms | 237MB |
+
+XLSX support is functional and feature-rich. Single-sheet reads now skip parsing the rest of the workbook and assemble rows with a tight loop, but the worksheet XML is still parsed into a full DOM tree by `fast-xml-parser`, which both costs time and inflates RSS relative to SheetJS's compact internal representation. Switching the worksheet path to a SAX-style streaming parser is the next planned XLSX optimization, and is expected to close most of both gaps.
 
 ### Interpretation
 
@@ -172,9 +177,13 @@ SHEETRA_BENCH_ROWS=100000 npm run benchmark:compare
 SHEETRA_BENCH_FILE=MOCK_DATA.csv npm run benchmark:files
 SHEETRA_BENCH_LIMIT=100000 npm run benchmark:files
 SHEETRA_BENCH_INCLUDE_MEMORY=1 npm run benchmark:files
+SHEETRA_BENCH_INCLUDE_MEMORY=1 npm run benchmark:isolated
+SHEETRA_BENCH_FILE=hts_2024_revision_9_xlsx.xlsx npm run benchmark:isolated
 SHEETRA_BENCH_PROFILE=full npm run benchmark:strong
 SHEETRA_BENCH_SCALES=100000,500000,1000000,2000000 npm run benchmark:strong
 ```
+
+`benchmark:isolated` runs each engine in a fresh Node process so RSS is not contaminated by previous tests, which is how the per-engine memory numbers above are produced.
 
 ### What the Full Suite Covers
 
@@ -223,6 +232,7 @@ npm run lint
 npm run benchmark
 npm run benchmark:compare
 npm run benchmark:files
+npm run benchmark:isolated
 npm run benchmark:strong
 ```
 
