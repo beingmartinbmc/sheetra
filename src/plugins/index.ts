@@ -32,6 +32,14 @@ export class PluginRegistry {
   validators(): ValidatorPlugin[] {
     return this.list().flatMap((plugin) => plugin.validators ?? []);
   }
+
+  validate(row: Row): SheetraIssue[] {
+    return this.validators().flatMap((validator) => validator(row));
+  }
+
+  validateRows(rows: Iterable<Row>): SheetraIssue[] {
+    return [...rows].flatMap((row) => this.validate(row));
+  }
 }
 
 export const plugins = new PluginRegistry();

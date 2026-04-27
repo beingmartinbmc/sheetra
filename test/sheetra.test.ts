@@ -6,10 +6,13 @@ import {
   diff,
   evaluateFormula,
   formula,
+  parseDetailed,
   query,
   read,
   readWorkbook,
   schema,
+  writeDiffReport,
+  writeIssueReport,
   workbook,
   workerMap,
   worksheet,
@@ -50,6 +53,23 @@ describe("Sheetra pipeline", () => {
     expect(rows[0]?.email).toBe("ada@example.com");
     expect(rows[0]?.age).toBe(42);
     expect(rows[0]?.joined).toBeInstanceOf(Date);
+  });
+
+  it("returns detailed validation issues and writes issue reports", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "sheetra-"));
+    const report = join(dir, "issues.csv");
+    const result = await parseDetailed(Buffer.from("email,age\nbad,old\nada@example.com,42\n"), {
+      email: schema.email(),
+      age: schema.number(),
+    }, { format: "csv", validation: "collect" });
+
+    await writeIssueReport(result.issues, report);
+    const reportText = await readFile(report, "utf8");
+
+    expect(result.rows).toEqual([{ email: "ada@example.com", age: 42 }]);
+    expect(result.issues).toHaveLength(2);
+    expect(reportText).toContain("invalid_type");
+    await rm(dir, { recursive: true, force: true });
   });
 
   it("round-trips CSV files", async () => {
@@ -120,12 +140,22 @@ describe("Sheetra differentiators", () => {
       { id: 2, name: "Grace", score: 3 },
     ];
 
-    await expect(query(rows, "SELECT name, score WHERE score > 5")).resolves.toEqual([{ name: "Ada", score: 10 }]);
-    expect(diff(rows, [{ id: 1, name: "Ada", score: 11 }], { key: "id" })).toMatchObject({
+    await expect(query(rows, "SELECT name, score WHERE score > 2 ORDER BY score DESC LIMIT 1")).resolves.toEqual([
+      { name: "Ada", score: 10 },
+    ]);
+
+    const result = diff(rows, [{ id: 1, name: "Ada", score: 11 }], { key: "id" });
+    expect(result).toMatchObject({
       added: [],
       removed: [{ id: 2, name: "Grace", score: 3 }],
       unchanged: 0,
     });
+
+    const dir = await mkdtemp(join(tmpdir(), "sheetra-"));
+    const report = join(dir, "diff.csv");
+    await writeDiffReport(result, report);
+    await expect(readFile(report, "utf8")).resolves.toContain("changed");
+    await rm(dir, { recursive: true, force: true });
   });
 
   it("runs mapper work in worker threads", async () => {

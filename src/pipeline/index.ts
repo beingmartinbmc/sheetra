@@ -186,6 +186,50 @@ export async function parse<S extends SchemaDefinition>(
   return read(source, options).schema(definition, schemaOptions).collect();
 }
 
+export async function parseDetailed<S extends SchemaDefinition>(
+  source: string | Buffer,
+  definition: S,
+  options: ReadOptions = {},
+): Promise<ProcessResult<InferSchema<S>>> {
+  const stats = createStats();
+  const rows: InferSchema<S>[] = [];
+  const issues: SheetraIssue[] = [];
+  let rowNumber = 1;
+
+  for await (const row of read(source, options)) {
+    if (!isRow(row)) {
+      const issue: SheetraIssue = {
+        code: "array_row",
+        message: "Schema validation expects object rows with named columns",
+        rowNumber,
+        severity: "error",
+      };
+      issues.push(issue);
+      stats.errors += 1;
+      if (options.validation === "fail-fast") throw new SheetraValidationError([issue]);
+      rowNumber += 1;
+      continue;
+    }
+
+    const cleaned = cleanRow(row, options.cleaning);
+    const result = validateRow(cleaned, definition, { rowNumber });
+    stats.rowsProcessed += 1;
+    observeMemory(stats);
+
+    if (result.value !== undefined) {
+      rows.push(result.value);
+    } else {
+      issues.push(...result.issues);
+      stats.errors += result.issues.length;
+      if (options.validation === "fail-fast") throw new SheetraValidationError(result.issues);
+    }
+
+    rowNumber += 1;
+  }
+
+  return { rows, issues, stats: finishStats(stats) };
+}
+
 async function writeJson(rows: AsyncIterable<RowLike>, destination: string): Promise<void> {
   const { writeFile } = await import("node:fs/promises");
   const data: RowLike[] = [];
