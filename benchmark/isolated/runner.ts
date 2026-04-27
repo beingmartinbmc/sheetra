@@ -24,6 +24,8 @@ sampler.unref();
 
 const runners: Runners = {
   sheetra: async () => (await read(file).drain()).rowsProcessed,
+  "sheetra-raw-drain": async () => (await read(file).drain()).rowsProcessed,
+  "sheetra-row-parse": async () => (await read(file).map((row) => row).drain()).rowsProcessed,
   fastcsv: () =>
     new Promise<number>((resolve, reject) => {
       let rows = 0;
