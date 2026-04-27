@@ -21,11 +21,12 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
-    "lint": "eslint \"src/**/*.ts\" \"test/**/*.ts\"",
+    "lint": "eslint \"src/**/*.ts\" \"test/**/*.ts\" \"benchmark/**/*.ts\"",
     "format": "prettier --write .",
     "benchmark": "tsx benchmark/streaming.ts",
     "benchmark:compare": "tsx benchmark/compare.ts",
     "benchmark:files": "tsx benchmark/files.ts",
+    "benchmark:strong": "tsx benchmark/strong.ts",
     "prepublishOnly": "npm run lint && npm run typecheck && npm test && npm run build"
   },
   "keywords": [
