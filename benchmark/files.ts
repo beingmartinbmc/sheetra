@@ -38,7 +38,11 @@ for (const file of files) {
     results.push(await measure(label, fileStat.size, "pravaah:xlsx", () => drainPravaah(file)));
   }
 
-  if ([".csv", ".xlsx"].includes(extension)) {
+  if (extension === ".xls") {
+    results.push(await measure(label, fileStat.size, "pravaah:xls", () => drainPravaah(file)));
+  }
+
+  if ([".csv", ".xlsx", ".xls"].includes(extension)) {
     results.push(
       await memoryHeavy(label, fileStat.size, "sheetjs:xlsx:readFile", () =>
         loadSheetJs().then((xlsx) => {
@@ -62,7 +66,7 @@ async function discoverFiles(): Promise<string[]> {
   return entries
     .filter((entry) => entry.isFile())
     .map((entry) => join(fixtureDir, entry.name))
-    .filter((file) => [".csv", ".xlsx"].includes(extname(file).toLowerCase()))
+    .filter((file) => [".csv", ".xlsx", ".xls"].includes(extname(file).toLowerCase()))
     .filter((file) => selectedFile === undefined || basename(file) === selectedFile);
 }
 
