@@ -2,6 +2,7 @@ import { collectCsvViaEvents, drainCsvViaEvents, readCsv, writeCsv } from "../cs
 import { finishStats, createStats, observeMemory } from "../perf/index.js";
 import { cleanRow, type InferSchema, type SchemaDefinition, PravaahValidationError, validateRow } from "../schema/index.js";
 import type { ProcessResult, ProcessStats, ReadOptions, Row, RowLike, PravaahIssue, WriteOptions } from "../types.js";
+import { readXls } from "../xls/index.js";
 import { readXlsx, writeXlsx } from "../xlsx/index.js";
 
 const MEMORY_SAMPLE_INTERVAL_ROWS = 4096;
@@ -72,7 +73,20 @@ export class PravaahPipeline<T = Row> implements AsyncIterable<T> {
   }
 
   clean(options: NonNullable<ReadOptions["cleaning"]>): PravaahPipeline<T> {
-    return this.map((row) => (isRow(row) ? cleanRow(row, options) : row) as T);
+    const iterate = () => this.buildIterator();
+    return new PravaahPipeline(async function* () {
+      const seen = new Set<string>();
+      for await (const row of iterate()) {
+        if (!isRow(row)) {
+          yield row;
+          continue;
+        }
+
+        const cleaned = cleanRow(row, options);
+        if (isDuplicate(cleaned, options.dedupeKey, seen)) continue;
+        yield cleaned as T;
+      }
+    });
   }
 
   schema<S extends SchemaDefinition>(
@@ -82,6 +96,7 @@ export class PravaahPipeline<T = Row> implements AsyncIterable<T> {
     const iterate = () => this.buildIterator();
     return new PravaahPipeline(async function* () {
       let rowNumber = 1;
+      const seen = new Set<string>();
       for await (const row of iterate()) {
         if (!isRow(row)) {
           throw new PravaahValidationError([
@@ -95,6 +110,10 @@ export class PravaahPipeline<T = Row> implements AsyncIterable<T> {
         }
 
         const cleaned = cleanRow(row, options.cleaning);
+        if (isDuplicate(cleaned, options.cleaning?.dedupeKey, seen)) {
+          rowNumber += 1;
+          continue;
+        }
         const result = validateRow(cleaned, definition, { rowNumber });
         if (result.value !== undefined) {
           yield result.value;
@@ -194,6 +213,7 @@ export function read(
     });
   }
   if (format === "xlsx") return new PravaahPipeline(() => readXlsx(source, options));
+  if (format === "xls") return new PravaahPipeline(() => readXls(source, options));
   if (format === "json") {
     return new PravaahPipeline(async function* () {
       const text = Buffer.isBuffer(source)
@@ -244,6 +264,7 @@ export async function parseDetailed<S extends SchemaDefinition>(
   const rows: InferSchema<S>[] = [];
   const issues: PravaahIssue[] = [];
   let rowNumber = 1;
+  const seen = new Set<string>();
 
   for await (const row of read(source, options)) {
     if (!isRow(row)) {
@@ -253,21 +274,27 @@ export async function parseDetailed<S extends SchemaDefinition>(
         rowNumber,
         severity: "error",
       };
-      issues.push(issue);
-      stats.errors += 1;
+      if (options.validation !== "skip") {
+        issues.push(issue);
+        stats.errors += 1;
+      }
       if (options.validation === "fail-fast") throw new PravaahValidationError([issue]);
       rowNumber += 1;
       continue;
     }
 
     const cleaned = cleanRow(row, options.cleaning);
+    if (isDuplicate(cleaned, options.cleaning?.dedupeKey, seen)) {
+      rowNumber += 1;
+      continue;
+    }
     const result = validateRow(cleaned, definition, { rowNumber });
     stats.rowsProcessed += 1;
     observeMemoryPeriodically(stats);
 
     if (result.value !== undefined) {
       rows.push(result.value);
-    } else {
+    } else if (options.validation !== "skip") {
       issues.push(...result.issues);
       stats.errors += result.issues.length;
       if (options.validation === "fail-fast") throw new PravaahValidationError(result.issues);
@@ -299,9 +326,10 @@ function observeMemoryPeriodically(stats: ProcessStats): void {
   if (stats.rowsProcessed % MEMORY_SAMPLE_INTERVAL_ROWS === 0) observeMemory(stats);
 }
 
-function inferFormat(path?: string): "xlsx" | "csv" | "json" {
+function inferFormat(path?: string): "xlsx" | "xls" | "csv" | "json" {
   if (path?.endsWith(".csv")) return "csv";
   if (path?.endsWith(".json")) return "json";
+  if (path?.endsWith(".xls")) return "xls";
   return "xlsx";
 }
 
@@ -315,4 +343,13 @@ function isIterableSource(value: unknown): value is AsyncIterable<RowLike> | Ite
 
 function isRow(value: unknown): value is Row {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isDuplicate(row: Row, dedupeKey: string | string[] | undefined, seen: Set<string>): boolean {
+  if (dedupeKey === undefined) return false;
+  const keys = Array.isArray(dedupeKey) ? dedupeKey : [dedupeKey];
+  const identity = keys.map((key) => String(row[key] ?? "")).join("\u0000");
+  if (seen.has(identity)) return true;
+  seen.add(identity);
+  return false;
 }
