@@ -8,6 +8,7 @@ benchmark/results/*
 !benchmark/results/README.md
 .DS_Store
 *.log
+.cursor/
 .env
 .env.*
 !.env.example
