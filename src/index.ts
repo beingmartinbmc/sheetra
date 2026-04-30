@@ -1,5 +1,6 @@
 export { read, write, parse, parseDetailed, PravaahPipeline } from "./pipeline/index.js";
 export { readCsv, writeCsv, inferCsv } from "./csv/index.js";
+export { readXls } from "./xls/index.js";
 export { readXlsx, writeXlsx, readWorkbook, writeWorkbook, workbook, worksheet, cell, formula } from "./xlsx/index.js";
 export {
   schema,

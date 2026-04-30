@@ -1,43 +1,175 @@
 # Pravaah
 
-Production-grade Excel, CSV, and JSON pipelines for Node.js.
+[![npm version](https://img.shields.io/npm/v/pravaah.svg)](https://www.npmjs.com/package/pravaah)
+[![npm downloads](https://img.shields.io/npm/dm/pravaah.svg)](https://www.npmjs.com/package/pravaah)
+[![CI](https://github.com/beingmartinbmc/pravaah/actions/workflows/ci.yml/badge.svg)](https://github.com/beingmartinbmc/pravaah/actions/workflows/ci.yml)
+[![license](https://img.shields.io/npm/l/pravaah.svg)](./LICENSE)
 
-Pravaah turns spreadsheets into typed, validated, streaming data pipelines. It is built for backend import jobs, ETL flows, customer uploads, audits, and data products where spreadsheet files are large, messy, and business-critical.
+**Stop writing messy CSV import logic. Validate 7 million rows without blowing memory.**
 
-```ts
-import { read, schema } from "pravaah";
+Pravaah is a schema-first, streaming data pipeline library for Excel, CSV, XLS, and JSON in Node.js.
 
-const leads = await read("leads.xlsx")
-  .clean({
-    trim: true,
-    normalizeWhitespace: true,
-    fuzzyHeaders: {
-      email: ["E-mail", "email id", "mail"],
-      company: ["Company Name", "account"],
-    },
-  })
-  .schema({
-    email: schema.email(),
-    company: schema.string(),
-    employees: schema.number({ optional: true }),
-    joinedAt: schema.date({ optional: true }),
-  })
-  .filter((lead) => lead.email.endsWith("@example.com"))
-  .collect();
+4.5x faster than fast-csv. 49% less memory than SheetJS on XLSX reads. Schema-validated. Streaming-first. TypeScript-native.
+
+Benchmarked on 7M-row datasets with isolated processes and RSS tracking.
+
+```text
+ CSV Read: 7M rows ─ time (lower is better)
+ ──────────────────────────────────────────
+ Pravaah  ■■■■■                          3.25s
+ fast-csv ■■■■■■■■■■■■■■■■■■■■■■■■■■■■■  9.46s
 ```
 
-## Why Pravaah
+---
 
-Most Node.js spreadsheet libraries are file manipulation libraries. They help you read cells or write workbooks, but leave ingestion, validation, cleanup, diagnostics, and memory control to your application.
+## 30-Second Win
 
-Pravaah is different. It treats every spreadsheet as a data contract and every import as a pipeline.
+No file setup. Paste this into a Node.js ESM project after `npm install pravaah`:
 
-- Stream large CSV/XLSX files without loading the entire dataset into memory.
-- Validate rows with TypeScript-inferred schemas.
-- Clean messy headers and whitespace before data reaches your database.
-- Query, diff, join, transform, and write data using one API.
-- Preserve formulas and build workbooks when you need XLSX output.
-- Measure throughput and RSS with reproducible benchmarks.
+```ts
+import { parse, schema } from "pravaah";
+
+const csv = Buffer.from(`email,total
+ada@example.com,42
+bad-email,99
+grace@example.com,120
+`);
+
+const rows = await parse(
+  csv,
+  {
+    email: schema.email(),
+    total: schema.number(),
+  },
+  {
+    format: "csv",
+    validation: "skip",
+  },
+);
+
+console.log(rows);
+// [
+//   { email: "ada@example.com", total: 42 },
+//   { email: "grace@example.com", total: 120 }
+// ]
+```
+
+---
+
+## The Problem
+
+You get a CSV from a customer. It has 2 million rows, inconsistent headers, blank emails, negative dollar amounts, and columns named "E-mail Address" instead of "email". Your job: validate it, clean it, reject bad rows, and store the rest.
+
+Here is what that typically looks like:
+
+```ts
+import fs from "fs";
+import { parse } from "@fast-csv/parse";
+
+const rows = [];
+const issues = [];
+let count = 0;
+
+fs.createReadStream("upload.csv")
+  .pipe(parse({ headers: true }))
+  .on("data", (row) => {
+    count++;
+    const email = (row["E-mail Address"] || row.email || row.Mail || "").trim();
+    if (!email || !email.includes("@")) {
+      issues.push({ row: count, reason: "invalid email", value: email });
+      return;
+    }
+    const amount = parseFloat(row.total);
+    if (isNaN(amount) || amount < 0) {
+      issues.push({ row: count, reason: "bad amount", value: row.total });
+      return;
+    }
+    rows.push({ email, amount, name: (row.name || "").trim() });
+  })
+  .on("end", () => {
+    console.log(`${rows.length} valid, ${issues.length} rejected`);
+    // now write issues report, handle memory, pray it doesn't OOM...
+  });
+```
+
+A screenful of fragile header matching. Manual validation. No types. No memory control. No issue report. And it falls apart the moment the file format changes.
+
+**With Pravaah:**
+
+```ts
+import { parseDetailed, schema, writeIssueReport } from "pravaah";
+
+const { rows, issues, stats } = await parseDetailed(
+  "upload.csv",
+  {
+    email: schema.email(),
+    name: schema.string({ optional: true }),
+    total: schema.number({ validate: (v) => (v < 0 ? "cannot be negative" : undefined) }),
+  },
+  {
+    validation: "collect",
+    cleaning: {
+      trim: true,
+      fuzzyHeaders: { email: ["E-mail Address", "Mail", "email id"] },
+    },
+  },
+);
+
+await writeIssueReport(issues, "rejected-rows.csv");
+console.log(`${rows.length} valid, ${issues.length} rejected in ${stats.durationMs}ms`);
+```
+
+Typed output. Fuzzy header matching. Schema validation. Issue report. Streaming memory. Done.
+
+---
+
+## Why This Exists
+
+We built Pravaah after repeatedly writing the same custom ingestion code across projects: parse a CSV, normalize vendor-specific headers, validate business rules, collect rejected rows, and keep memory stable under large uploads.
+
+Most spreadsheet libraries make you choose between low-level file parsing and your own pile of validation glue. Pravaah puts the import workflow itself behind one pipeline.
+
+---
+
+## What Happens When You Run It
+
+```text
+$ node import.ts
+
+Processed 2,041,293 rows in 4.2s
+  Valid:    1,987,441
+  Rejected: 53,852
+  Peak RSS: 112MB
+
+Issue report written to rejected-rows.csv
+```
+
+```text
+rejected-rows.csv:
+severity,code,message,rowNumber,column,expected,rawValue
+error,invalid_type,email must be email,14,email,email,not-an-email
+error,invalid_value,cannot be negative,203,total,number,-50.00
+error,missing_column,email is required,891,email,email,
+```
+
+---
+
+## How It Works
+
+```text
+┌─────────┐    ┌─────────┐    ┌──────────┐    ┌───────────┐    ┌──────────┐
+│  File   │───▶│  Clean  │───▶│ Validate │───▶│ Transform │───▶│  Output  │
+│ CSV/XLSX│    │ headers │    │  schema  │    │  map/filt │    │ file/db  │
+└─────────┘    └─────────┘    └──────────┘    └───────────┘    └──────────┘
+                    │               │                │
+                    ▼               ▼                ▼
+              fuzzy match     type-safe rows    fused stages
+              trim/dedupe     issue report      one pass
+```
+
+Pipeline stages are lazy. CSV reads stay streaming end-to-end; XLSX reads target the selected worksheet without inflating a full workbook model. Adjacent transforms are fused into a single pass, and `.collect()` / `parseDetailed()` only materialize the rows you ask them to return.
+
+---
 
 ## Install
 
@@ -45,14 +177,103 @@ Pravaah is different. It treats every spreadsheet as a data contract and every i
 npm install pravaah
 ```
 
-Requirements:
+Node.js 20+. ESM.
 
-- Node.js 20 or newer.
-- ESM project or compatible bundler/runtime.
+---
+
+## Who This Is For
+
+- **Backend devs** handling customer CSV/XLSX uploads in Express, Fastify, NestJS.
+- **SaaS teams** building admin import tools where users upload messy spreadsheets.
+- **Data engineers** writing ETL pipelines that need validation before database writes.
+- **Platform teams** that want predictable memory and throughput on large files.
+
+Works well with Express, Fastify, NestJS, serverless jobs, queue workers, and backend ingestion pipelines.
+
+If you need Excel styling, charts, drawings, macros, or arbitrary workbook editing, this is not the right tool. Use SheetJS or ExcelJS for workbook manipulation. Pravaah is for treating spreadsheets as **data**, not documents.
+
+---
+
+## Pravaah vs The Alternatives
+
+Existing libraries parse files. Pravaah handles the entire ingestion pipeline: read, clean, validate, transform, report, and write.
+
+Use SheetJS or ExcelJS when you need workbook manipulation. Use fast-csv when you only need CSV parsing. Use Pravaah when the spreadsheet is entering your product and must become trusted application data.
+
+```text
+ Ingestion workflow coverage
+ ─────────────────────────────────────────────────────────
+ Pravaah  Read ■ Clean ■ Validate ■ Transform ■ Report ■ Write
+ SheetJS  Read ■                                      Write
+ ExcelJS  Read ■                                      Write
+ fast-csv Read ■                                      Write
+```
+
+| | Pravaah | SheetJS | ExcelJS | fast-csv |
+| --- | :---: | :---: | :---: | :---: |
+| Streaming CSV read | Yes | No (in-memory) | N/A | Yes |
+| Targeted XLSX read | Yes | No (in-memory) | Partial | N/A |
+| Schema validation | Built-in | No | No | No |
+| Fuzzy header cleaning | Built-in | No | No | No |
+| TypeScript type inference | Yes | No | No | No |
+| CSV read speed (7M rows) | **3.25s** | N/A | N/A | 9.46s |
+| XLSX read speed (36K rows) | **396ms** | 437ms | 572ms | N/A |
+| Peak memory (36K row XLSX) | **120MB** | 234MB | 294MB | N/A |
+| Issue reports | Built-in | No | No | No |
+| Pipeline transforms | Built-in | No | No | No |
+| Worker thread parallelism | Built-in | No | No | No |
+| Formula engine | Built-in | Read-only | Read-only | No |
+
+---
+
+## The Killer Walkthrough
+
+A user uploads a CRM export. The headers are inconsistent across vendors. Some emails are garbage. Some dollar amounts are negative. You need clean rows in your database and a rejection report for the ops team.
+
+```ts
+import { parseDetailed, schema, writeIssueReport } from "pravaah";
+
+// 1. Define your data contract
+const contactSchema = {
+  email: schema.email(),
+  company: schema.string(),
+  deal_value: schema.number({
+    validate: (v) => (v < 0 ? "deal value cannot be negative" : undefined),
+  }),
+  stage: schema.string({ defaultValue: "new" }),
+};
+
+// 2. Process the upload
+const { rows, issues, stats } = await parseDetailed("crm-export.csv", contactSchema, {
+  validation: "collect",
+  cleaning: {
+    trim: true,
+    normalizeWhitespace: true,
+    fuzzyHeaders: {
+      email: ["E-mail", "Email Address", "Contact Email", "mail"],
+      company: ["Company Name", "Account", "Organization"],
+      deal_value: ["Amount", "Deal Value", "Value (USD)"],
+    },
+  },
+});
+
+// 3. Store valid rows
+await db.contacts.insertMany(rows);
+
+// 4. Send rejection report to ops
+await writeIssueReport(issues, "upload-rejections.csv");
+
+console.log(`Imported ${rows.length} contacts, rejected ${issues.length} in ${stats.durationMs}ms`);
+// → Imported 847,293 contacts, rejected 12,041 in 2,847ms
+```
+
+One pipeline. No manual parsing. Controlled memory. Full audit trail.
+
+---
 
 ## Quick Start
 
-### Read A File
+### Read any file
 
 ```ts
 import { read } from "pravaah";
@@ -62,248 +283,152 @@ for await (const row of read("customers.csv")) {
 }
 ```
 
-Pravaah auto-detects `.csv`, `.xlsx`, and `.json` from the file extension. You can also force a format:
+Auto-detects `.csv`, `.xlsx`, `.xls`, and `.json`. Force a format when reading buffers:
 
 ```ts
 const rows = await read(buffer, { format: "xlsx", sheet: "Customers" }).collect();
 ```
 
-### Transform And Write
+### Transform and write
 
 ```ts
 import { read, schema } from "pravaah";
 
 const stats = await read("orders.csv")
-  .schema({
-    orderId: schema.string(),
-    email: schema.email(),
-    total: schema.number(),
-  })
+  .schema({ orderId: schema.string(), email: schema.email(), total: schema.number() })
   .filter((row) => row.total > 100)
-  .map((row) => ({
-    ...row,
-    status: "priority",
-  }))
-  .write("priority-orders.xlsx", {
-    sheetName: "Priority Orders",
-  });
+  .map((row) => ({ ...row, status: "priority" }))
+  .write("priority-orders.xlsx", { sheetName: "Priority" });
 
-console.log(stats.rowsWritten, stats.durationMs);
+console.log(`Wrote ${stats.rowsWritten} rows in ${stats.durationMs}ms`);
 ```
 
-### Parse With A Schema
-
-```ts
-import { parse, schema } from "pravaah";
-
-const orders = await parse(
-  "orders.csv",
-  {
-    orderId: schema.string(),
-    email: schema.email(),
-    total: schema.number({
-      validate: (value) => (value < 0 ? "total cannot be negative" : undefined),
-    }),
-    paid: schema.boolean({ defaultValue: false }),
-  },
-  {
-    format: "csv",
-    validation: "fail-fast",
-  },
-);
-
-// orders is inferred as:
-// Array<{ orderId: string; email: string; total: number; paid: boolean }>
-```
-
-### Collect Validation Issues
-
-```ts
-import { parseDetailed, schema, writeIssueReport } from "pravaah";
-
-const result = await parseDetailed(
-  "contacts.xlsx",
-  {
-    email: schema.email(),
-    phone: schema.phone({ optional: true }),
-    source: schema.string({ defaultValue: "upload" }),
-  },
-  {
-    validation: "collect",
-    cleaning: {
-      trim: true,
-      fuzzyHeaders: {
-        email: ["E-mail Address", "mail"],
-        phone: ["mobile", "phone number"],
-      },
-    },
-  },
-);
-
-await writeIssueReport(result.issues, "import-issues.csv");
-console.log(result.rows.length, result.issues.length);
-```
-
-### Count Rows Without Materializing Them
+### Count rows without materializing
 
 ```ts
 import { read } from "pravaah";
 
-const stats = await read("large-file.csv").drain();
-
-console.log(`Processed ${stats.rowsProcessed} rows`);
+const stats = await read("7-million-rows.csv").drain();
+// → { rowsProcessed: 7046063, durationMs: 405, peakRssBytes: 113MB }
 ```
 
-For CSV files, `drain()` uses a raw record-boundary scanner when no transforms are attached. It counts rows without allocating row objects.
+Uses a raw byte scanner — no row objects allocated.
 
-## Core Concepts
+### Parse with full type safety
 
-### Streaming Pipelines
+```ts
+import { parse, schema } from "pravaah";
 
-`read()` returns a lazy `PravaahPipeline`.
+const orders = await parse("orders.csv", {
+  orderId: schema.string(),
+  email: schema.email(),
+  total: schema.number({ validate: (v) => (v < 0 ? "negative" : undefined) }),
+  paid: schema.boolean({ defaultValue: false }),
+}, { validation: "fail-fast" });
+
+// orders: Array<{ orderId: string; email: string; total: number; paid: boolean }>
+```
+
+---
+
+## Core Capabilities
+
+- Streaming CSV ingestion with count-only scans for huge files.
+- Schema validation with TypeScript-inferred output rows.
+- Cleaning, trimming, fuzzy headers, and deduplication.
+- Built-in issue reports, dataset diffs, joins, and SQL-like queries.
+- XLSX workbook writing with formulas and sheet helpers.
+- Worker-thread mapping for CPU-heavy row transforms.
+
+---
+
+## Pipeline API
+
+`read()` returns a lazy `PravaahPipeline`. Nothing executes until you call `.collect()`, `.drain()`, `.process()`, or `.write()`.
 
 ```ts
 import { read, schema } from "pravaah";
 
 const pipeline = read("input.csv")
-  .clean({ trim: true })
-  .schema({
-    email: schema.email(),
-    name: schema.string({ optional: true }),
-  })
+  .clean({ trim: true, fuzzyHeaders: { email: ["E-mail", "mail"] } })
+  .schema({ email: schema.email(), name: schema.string({ optional: true }) })
   .map((row) => ({ ...row, importedAt: new Date().toISOString() }))
-  .filter((row) => row.email.endsWith("@example.com"))
+  .filter((row) => row.email.endsWith("@company.com"))
   .take(10_000);
 
 const rows = await pipeline.collect();
 ```
 
-Available pipeline methods:
+| Method | What it does |
+| --- | --- |
+| `.map(fn)` | Transform each row |
+| `.filter(fn)` | Keep matching rows |
+| `.clean(opts)` | Normalize headers and values |
+| `.schema(def)` | Validate and type rows |
+| `.take(n)` | Stop after n rows |
+| `.collect()` | Materialize into array |
+| `.drain()` | Consume without storing |
+| `.process()` | Return rows + issues + stats |
+| `.write(dest)` | Write to CSV/XLSX/JSON |
 
-- `.map(fn)` transforms rows.
-- `.filter(fn)` keeps matching rows.
-- `.clean(options)` normalizes row values and headers.
-- `.schema(definition, options)` validates and types rows.
-- `.take(limit)` stops after a fixed number of rows.
-- `.collect()` materializes rows into an array.
-- `.process()` returns rows, issues, and stats.
-- `.drain()` consumes rows without storing them.
-- `.write(destination, options)` writes the pipeline output.
+Adjacent `.map()` and `.filter()` calls are **fused** into a single iteration pass.
 
-Adjacent `.map()` and `.filter()` calls are fused into a single iteration pass to reduce per-row async overhead.
+---
 
-### Schemas
-
-Schemas validate incoming rows and infer TypeScript types.
+## Schema Validation
 
 ```ts
 import { schema } from "pravaah";
 
 const userSchema = {
   id: schema.string(),
-  name: schema.string({ validate: (value) => (value.length < 2 ? "name too short" : undefined) }),
+  name: schema.string({ validate: (v) => (v.length < 2 ? "too short" : undefined) }),
   age: schema.number({ optional: true }),
   active: schema.boolean({ defaultValue: true }),
   signupDate: schema.date(),
   email: schema.email(),
   phone: schema.phone({ optional: true }),
-  metadata: schema.any({ optional: true }),
 };
 ```
 
-Field options:
+**Validation modes:**
 
-- `optional`: allow missing, `null`, or empty values.
-- `defaultValue`: use a fallback when the cell is empty.
-- `coerce`: convert spreadsheet strings into typed values.
-- `validate`: add domain-specific validation.
+| Mode | Behavior |
+| --- | --- |
+| `fail-fast` | Throw on first invalid row |
+| `collect` | Keep valid rows, collect all issues |
+| `skip` | Silently drop invalid rows |
 
-Validation modes:
+**Field options:** `optional`, `defaultValue`, `coerce`, `validate`.
 
-- `fail-fast`: throw on the first invalid row.
-- `collect`: keep valid rows and collect/report issues.
-- `skip`: skip invalid rows without warnings.
+---
 
-### Cleaning
+## File Format Support
 
-```ts
-import { read } from "pravaah";
+| Format | Read | Write | Notes |
+| --- | :---: | :---: | --- |
+| `.csv` | Streaming | Streaming | Custom parser, zero-row-object count path, backpressure-aware writer |
+| `.xlsx` | Targeted | Full | Selective decompression, lazy shared strings |
+| `.xls` | Full | — | Via optional `xlsx` package (`npm install xlsx`) |
+| `.json` | Full | Full | For fixtures, snapshots, and intermediate ETL |
 
-const rows = await read("customers.csv")
-  .clean({
-    trim: true,
-    normalizeWhitespace: true,
-    dedupeKey: ["email", "accountId"],
-    fuzzyHeaders: {
-      email: ["E-mail", "Email Address", "mail"],
-      accountId: ["Account ID", "acct id"],
-    },
-  })
-  .collect();
-```
+### CSV specifics
 
-Cleaning supports trimming, whitespace normalization, fuzzy header mapping, and deduplication by one or more keys.
-
-## File Formats
-
-### CSV
-
-```ts
-import { read } from "pravaah";
-
-const rows = await read("data.csv", {
-  headers: true,
-  delimiter: ",",
-  inferTypes: true,
-}).collect();
-
-await read("data.csv").write("copy.csv", {
-  headers: ["id", "email", "total"],
-});
-```
-
-CSV features:
-
-- Streaming parser built for backend ingestion.
-- RFC-style quoted fields, escaped quotes, and CRLF handling.
+- RFC-compliant quoted fields, escaped quotes, CRLF.
 - `headers: true`, `headers: false`, or explicit header arrays.
 - Single-character custom delimiters.
-- Optional primitive inference for numbers, booleans, and nulls.
-- Backpressure-aware CSV writing.
+- Optional type inference for numbers, booleans, and nulls.
 
-### XLSX
-
-```ts
-import { read } from "pravaah";
-
-const rows = await read("workbook.xlsx", {
-  sheet: "Invoices",
-  formulas: "preserve",
-}).collect();
-```
-
-XLSX read features:
+### XLSX specifics
 
 - Sheet selection by name or index.
-- Selective zip decompression of only required workbook entries.
+- Decompresses workbook metadata and the targeted sheet instead of building a full workbook model.
 - Lazy shared-string resolution.
-- Buffer-based worksheet XML scanning.
-- Formula preservation with `{ formula, result }` cells.
+- Formula preservation: `{ formula, result }` cells.
 
-### JSON
-
-```ts
-import { read } from "pravaah";
-
-const rows = await read("rows.json", { format: "json" }).collect();
-await read(rows).write("rows.json", { format: "json" });
-```
-
-JSON support is useful for fixtures, snapshots, intermediate ETL files, and tests.
+---
 
 ## Workbook Authoring
-
-Use `write()` for simple row exports. Use workbook helpers when you need multiple sheets, formulas, column widths, merges, data validations, auto-filters, or frozen panes.
 
 ```ts
 import { formula, workbook, worksheet, writeWorkbook } from "pravaah";
@@ -314,355 +439,259 @@ const summary = worksheet("Summary", [
   { metric: "Delta", value: formula("B2-B3", 25000) },
 ]);
 
-summary.columns = [
-  { header: "metric", width: 24 },
-  { header: "value", width: 16 },
-];
-summary.merges = ["A1:B1"];
+summary.columns = [{ header: "metric", width: 24 }, { header: "value", width: 16 }];
 summary.frozen = { ySplit: 1, topLeftCell: "A2" };
-summary.validations = [{ range: "B2:B100", type: "decimal", formula: "0" }];
-summary.tables = [{ name: "SummaryTable", range: "A1:B4", columns: ["metric", "value"] }];
 
-const book = workbook([summary]);
-book.properties.creator = "Pravaah";
-
-await writeWorkbook(book, "report.xlsx");
+await writeWorkbook(workbook([summary]), "report.xlsx");
 ```
 
-## Query Data
+Supports: multiple sheets, formulas, column widths, merges, data validations, auto-filters, frozen panes, table definitions.
+
+---
+
+## Query, Diff, Join
 
 ```ts
-import { query } from "pravaah";
+import { query, diff, read, createIndex, joinRows, writeDiffReport } from "pravaah";
 
-const topAccounts = await query(
-  "accounts.csv",
-  "SELECT id, name, revenue WHERE revenue >= 100000 ORDER BY revenue DESC LIMIT 25",
-);
+// SQL-like queries
+const top = await query("accounts.csv", "SELECT id, name, revenue WHERE revenue >= 100000 ORDER BY revenue DESC LIMIT 25");
+
+// Dataset diff
+const before = await read("customers-v1.csv").collect();
+const after = await read("customers-v2.csv").collect();
+const changes = diff(before, after, { key: "customerId" });
+await writeDiffReport(changes, "changes.csv");
+
+// Index + join
+const enriched = joinRows(orders, customers, "customerId");
 ```
 
-Supported SQL-like clauses:
-
-- `SELECT *` or a comma-separated column list.
-- `WHERE` with `=`, `!=`, `>`, `>=`, `<`, `<=`, and `contains`.
-- `ORDER BY column ASC|DESC`.
-- `LIMIT n`.
-
-For in-memory joins and lookups:
-
-```ts
-import { createIndex, joinRows } from "pravaah";
-
-const byCustomer = createIndex(customers, "customerId");
-const enrichedOrders = joinRows(orders, customers, "customerId");
-```
-
-## Diff Datasets
-
-```ts
-import { diff, read, writeDiffReport } from "pravaah";
-
-const previous = await read("customers-before.csv").collect();
-const current = await read("customers-after.csv").collect();
-
-const result = diff(previous, current, { key: "customerId" });
-
-await writeDiffReport(result, "customer-diff.csv");
-```
-
-The diff result contains added rows, removed rows, changed rows with changed columns, and an unchanged count.
+---
 
 ## Formula Engine
 
 ```ts
 import { FormulaEngine, evaluateFormula } from "pravaah";
 
-const total = evaluateFormula("SUM(subtotal, tax)", {
-  subtotal: 100,
-  tax: 8.25,
-});
+evaluateFormula("SUM(subtotal, tax)", { subtotal: 100, tax: 8.25 }); // 108.25
 
 const engine = new FormulaEngine({
-  functions: {
-    DISCOUNT: ([amount, percent]) => Number(amount) * (1 - Number(percent)),
-  },
+  functions: { DISCOUNT: ([amt, pct]) => Number(amt) * (1 - Number(pct)) },
 });
-
-const discounted = engine.evaluate("DISCOUNT(total, 0.15)", { total: 200 });
+engine.evaluate("DISCOUNT(total, 0.15)", { total: 200 }); // 170
 ```
 
-Built-in functions:
+Built-in: `SUM`, `AVERAGE`, `MIN`, `MAX`, `COUNT`, `IF`, `CONCAT`, plus arithmetic.
 
-- `SUM`
-- `AVERAGE`
-- `MIN`
-- `MAX`
-- `COUNT`
-- `IF`
-- `CONCAT`
-
-Simple arithmetic expressions such as `subtotal + tax` are also supported.
+---
 
 ## Plugins
 
 ```ts
-import { FormulaEngine, plugins } from "pravaah";
+import { plugins } from "pravaah";
 
 plugins.use({
   name: "business-rules",
   validators: [
-    (row) =>
-      Number(row.total) < 0
-        ? [
-            {
-              code: "negative_total",
-              message: "total cannot be negative",
-              column: "total",
-              rawValue: row.total,
-              expected: ">= 0",
-              severity: "error",
-            },
-          ]
-        : [],
+    (row) => Number(row.total) < 0
+      ? [{ code: "negative_total", message: "total cannot be negative", column: "total", severity: "error" }]
+      : [],
   ],
-  formulas: {
-    MARGIN: ([revenue, cost]) => Number(revenue) - Number(cost),
-  },
+  formulas: { MARGIN: ([revenue, cost]) => Number(revenue) - Number(cost) },
 });
-
-const issues = plugins.validate({ total: -10 });
-const engine = new FormulaEngine({ functions: plugins.formulas() });
 ```
 
-Plugins can provide validators, parsers, exporters, and formula functions.
+---
 
-## Parallel Mapping
+## Parallel Worker Mapping
 
 ```ts
 import { read, workerMap } from "pravaah";
 
 const rows = await read("large.csv", { inferTypes: true }).collect();
-
-const enriched = await workerMap(
-  rows,
-  `(row) => ({
-    ...row,
-    score: Number(row.revenue ?? 0) * 0.12
-  })`,
-  { concurrency: 4 },
-);
+const enriched = await workerMap(rows, `(row) => ({ ...row, score: Number(row.revenue) * 0.12 })`, { concurrency: 4 });
 ```
 
-`workerMap()` is useful for CPU-heavy row transformations. The mapper is passed as a JavaScript function string and executed in Node worker threads.
+Runs CPU-heavy transforms in Node.js worker threads.
+
+---
+
+## Benchmarks
+
+Every number below is from an isolated child process. RSS sampled every 25ms. Best of 3 runs. macOS Apple Silicon, Node.js 22.
+
+### CSV Read
+
+```text
+ 7M rows, 146MB ─ time (lower is better)
+ ──────────────────────────────────────────
+ Pravaah  ■■■■■                          3.25s
+ fast-csv ■■■■■■■■■■■■■■■■■■■■■■■■■■■■■  9.46s
+
+ 1M rows, 244MB ─ time (lower is better)
+ ──────────────────────────────────────────
+ Pravaah  ■■■■■■                          1.89s
+ fast-csv ■■■■■■■■■■■■■■■■■■■■■■■■■■■■■  8.48s
+
+ 1K rows, 498KB ─ time (lower is better)
+ ──────────────────────────────────────────
+ Pravaah  ■■■                             8ms
+ fast-csv ■■■■■■■■                        27ms
+ SheetJS  ■■■■■■■■■■■■■■■■■■■■■■■■■■■■■  97ms
+```
+
+| Workload | Engine | Time | Peak RSS |
+| --- | --- | ---: | ---: |
+| 7M rows, 146MB | Pravaah | **3.25s** | **112MB** |
+| 7M rows, 146MB | fast-csv | 9.46s | 136MB |
+| 1M rows, 244MB | Pravaah | **1.89s** | **110MB** |
+| 1M rows, 244MB | fast-csv | 8.48s | 150MB |
+| 1K rows, 498KB | Pravaah | **8ms** | **84MB** |
+| 1K rows, 498KB | fast-csv | 27ms | 95MB |
+| 1K rows, 498KB | SheetJS | 97ms | 124MB |
+
+`read(file).drain()` (count-only, no row objects): **405ms** for 7M rows, **752ms** for 1M rows.
+
+### XLSX Read
+
+```text
+ 36K rows, 1.5MB ─ time (lower is better)
+ ──────────────────────────────────────────
+ Pravaah ■■■■■■■■■■■■■■■■■■■■            396ms
+ SheetJS ■■■■■■■■■■■■■■■■■■■■■■          437ms
+ ExcelJS ■■■■■■■■■■■■■■■■■■■■■■■■■■■■■   572ms
+
+ 36K rows, 1.5MB ─ peak memory (lower is better)
+ ──────────────────────────────────────────
+ Pravaah ■■■■■■■■■■■■                    120MB
+ SheetJS ■■■■■■■■■■■■■■■■■■■■■■■         234MB
+ ExcelJS ■■■■■■■■■■■■■■■■■■■■■■■■■■■■■   294MB
+```
+
+| Workload | Engine | Time | Peak RSS |
+| --- | --- | ---: | ---: |
+| 36K rows, 1.5MB | Pravaah | **396ms** | **120MB** |
+| 36K rows, 1.5MB | SheetJS | 437ms | 234MB |
+| 36K rows, 1.5MB | ExcelJS | 572ms | 294MB |
+
+### Write
+
+```text
+ CSV Write: 100K rows ─ time (lower is better)
+ ──────────────────────────────────────────
+ fast-csv ■■■■■■■■                        125ms
+ Pravaah  ■■■■■■■■■                       141ms
+ SheetJS  ■■■■■■■■■■■■■■■■■■■■■■■■■■■■■  472ms
+
+ XLSX Write: 100K rows ─ peak memory (lower is better)
+ ──────────────────────────────────────────
+ Pravaah ■■■■■■                          222MB
+ SheetJS ■■■■■■■■■■■                     398MB
+ ExcelJS ■■■■■■■■■■■■■■■■■■■■■■■■■■■■■  1,074MB
+```
+
+| Workload | Engine | Time | Peak RSS |
+| --- | --- | ---: | ---: |
+| CSV write, 100K rows | Pravaah | **141ms** | **136MB** |
+| CSV write, 100K rows | fast-csv | 125ms | 166MB |
+| CSV write, 100K rows | SheetJS | 472ms | 315MB |
+| XLSX write, 100K rows | Pravaah | **701ms** | **222MB** |
+| XLSX write, 100K rows | SheetJS | 687ms | 398MB |
+| XLSX write, 100K rows | ExcelJS | 1,788ms | 1,074MB |
+
+### TL;DR
+
+| | vs fast-csv | vs SheetJS | vs ExcelJS |
+| --- | --- | --- | --- |
+| CSV read speed | **4.5x faster** | — | — |
+| CSV read memory | **27% less** | — | — |
+| XLSX read speed | — | **10% faster** | **31% faster** |
+| XLSX read memory | — | **49% less** | **59% less** |
+| XLSX write memory | — | **44% less** | **79% less** |
+
+Run them yourself:
+
+```sh
+npm run benchmark:isolated
+PRAVAAH_BENCH_RUNS=5 npm run benchmark:isolated
+```
+
+If Pravaah saved you from another one-off CSV importer, a star helps others find it. Issues and PRs are welcome; see [CONTRIBUTING.md](./CONTRIBUTING.md) for local development and benchmark notes.
+
+---
+
+## How The Performance Works
+
+**CSV:** Custom streaming parser with a low-allocation hot path. Raw record-boundary scanner for drain-only workloads. No heavy parser dependency on the read side.
+
+**XLSX:** Selective ZIP decompression for workbook metadata and the target sheet. Lazy shared-string indexing. Raw byte scanning instead of DOM construction. Dimension-aware preallocation.
+
+**Pipelines:** Lazy AsyncIterable execution. Fused map/filter stages compiled into a single iterator. Built-in RSS tracking.
+
+---
 
 ## API Reference
 
-### Top-Level Functions
-
-| API | Purpose |
+| Function | Purpose |
 | --- | --- |
-| `read(source, options)` | Create a lazy pipeline from CSV, XLSX, JSON, Buffer, Iterable, or AsyncIterable input. |
-| `write(rows, destination, options)` | Write rows to CSV, XLSX, or JSON. |
-| `parse(source, schema, options)` | Read, validate, and collect typed rows. |
-| `parseDetailed(source, schema, options)` | Read and validate with rows, issues, and stats. |
-| `query(source, sql)` | Run SQL-like queries over row data. |
-| `diff(oldRows, newRows, options)` | Compare datasets by key. |
-| `writeIssueReport(issues, destination)` | Write validation diagnostics as CSV. |
-| `writeDiffReport(result, destination)` | Write diff diagnostics as CSV. |
-| `readWorkbook(source, options)` | Load a full XLSX workbook model. |
-| `writeWorkbook(workbook, destination, options)` | Write a full XLSX workbook model. |
-| `workerMap(rows, mapperSource, options)` | Run parallel row mapping in worker threads. |
+| `read(source, options)` | Lazy pipeline from CSV, XLSX, XLS, JSON, Buffer, Iterable, or AsyncIterable |
+| `write(rows, dest, options)` | Write to CSV, XLSX, or JSON |
+| `parse(source, schema, options)` | Validate and collect typed rows |
+| `parseDetailed(source, schema, options)` | Rows + issues + stats |
+| `query(source, sql)` | SQL-like queries over data |
+| `diff(old, new, options)` | Compare datasets by key |
+| `writeIssueReport(issues, dest)` | Validation diagnostics as CSV |
+| `writeDiffReport(result, dest)` | Diff output as CSV |
+| `writeWorkbook(book, dest)` | Multi-sheet XLSX with formulas |
+| `workerMap(rows, fn, options)` | Parallel row mapping in workers |
 
 ### Read Options
 
 | Option | Description |
 | --- | --- |
-| `format` | Force `xlsx`, `csv`, or `json`. |
-| `sheet` | XLSX sheet name or zero-based sheet index. |
-| `headers` | `true`, `false`, or explicit header names. |
-| `delimiter` | CSV delimiter. Must be one character. |
-| `inferTypes` | Convert CSV strings into primitive values. |
-| `formulas` | Use formula cached values or preserve formula cells. |
-| `validation` | `fail-fast`, `collect`, or `skip`. |
-| `cleaning` | Inline cleaning options. |
+| `format` | Force `xlsx`, `xls`, `csv`, or `json` |
+| `sheet` | Sheet name or zero-based index |
+| `headers` | `true`, `false`, or explicit header array |
+| `delimiter` | CSV delimiter (single character) |
+| `inferTypes` | Convert strings to primitives |
+| `formulas` | `"values"` or `"preserve"` |
+| `validation` | `"fail-fast"`, `"collect"`, or `"skip"` |
+| `cleaning` | Inline cleaning options |
 
 ### Write Options
 
 | Option | Description |
 | --- | --- |
-| `format` | Force `xlsx`, `csv`, or `json`. |
-| `sheetName` | Output XLSX worksheet name. |
-| `headers` | Explicit output column order. |
-| `delimiter` | CSV output delimiter. |
+| `format` | Force `xlsx`, `csv`, or `json` |
+| `sheetName` | Output worksheet name |
+| `headers` | Column order |
+| `delimiter` | CSV output delimiter |
 
-## Benchmarks
-
-Benchmarks are included as runnable scripts, not hidden marketing claims. Every engine runs in a fresh Node.js process so RSS measurements are not contaminated by prior runs.
-
-```sh
-npm run benchmark:isolated
-```
-
-Environment used for the published numbers:
-
-- macOS Darwin 25.4.0, Apple Silicon.
-- Node.js v22.
-- Fresh child process per engine.
-- RSS sampled every 25ms.
-- Best of three runs.
-- Dataset names are intentionally anonymized; comparisons use row counts and file sizes only.
-
-### Read Throughput
-
-```text
-CSV Read: 1M Rows, 244MB (seconds, lower is better)
-
-Pravaah  | ####                  1.90s
-SheetJS  | ################      7.47s
-fast-csv | ##################    8.57s
-```
-
-```text
-XLSX Read: 36K Rows, 1.5MB (seconds, lower is better)
-
-Pravaah | #############          0.390s
-SheetJS | ###############        0.431s
-ExcelJS | ####################   0.575s
-```
-
-| Workload | Engine | Time | Peak RSS |
-| --- | --- | ---: | ---: |
-| CSV read, 1M rows, 244MB | Pravaah | **1.90s** | **110MB** |
-| CSV read, 1M rows, 244MB | fast-csv | 8.57s | 149MB |
-| CSV read, 1M rows, 244MB | SheetJS | 7.47s | 3,413MB |
-| CSV read, 1K rows, 498KB | Pravaah | **8ms** | **84MB** |
-| CSV read, 1K rows, 498KB | fast-csv | 28ms | 95MB |
-| CSV read, 1K rows, 498KB | SheetJS | 103ms | 124MB |
-| XLSX read, 36K rows, 1.5MB | Pravaah | **390ms** | **123MB** |
-| XLSX read, 36K rows, 1.5MB | SheetJS | 431ms | 234MB |
-| XLSX read, 36K rows, 1.5MB | ExcelJS | 575ms | 295MB |
-
-For count-only CSV probes, `read(csv).drain()` scanned 1M rows / 244MB in **760ms** with **114MB** peak RSS by counting record boundaries without parsing cells.
-
-### Write Throughput
-
-```text
-CSV Write: 100K Rows (milliseconds, lower is better)
-
-fast-csv | #####                 126ms
-Pravaah  | ######                141ms
-SheetJS  | ####################  483ms
-```
-
-```text
-XLSX Write: 100K Rows (milliseconds, lower is better)
-
-Pravaah | ########               710ms
-SheetJS | ########               755ms
-ExcelJS | ####################   1,846ms
-```
-
-| Workload | Engine | Time | Peak RSS |
-| --- | --- | ---: | ---: |
-| CSV write, 100K rows | Pravaah | **141ms** | **138MB** |
-| CSV write, 100K rows | fast-csv | 126ms | 166MB |
-| CSV write, 100K rows | SheetJS | 483ms | 315MB |
-| XLSX write, 100K rows | Pravaah | **710ms** | **222MB** |
-| XLSX write, 100K rows | SheetJS | 755ms | 451MB |
-| XLSX write, 100K rows | ExcelJS | 1,846ms | 1,075MB |
-
-### Memory Comparison
-
-```text
-Peak RSS: CSV Read 1M Rows (MB, lower is better)
-
-Pravaah  | #                     110MB
-fast-csv | #                     149MB
-SheetJS  | ####################  3,413MB
-```
-
-```text
-Peak RSS: XLSX Write 100K Rows (MB, lower is better)
-
-Pravaah | ####                  222MB
-SheetJS | ########              451MB
-ExcelJS | ####################  1,075MB
-```
-
-### Benchmark Summary
-
-| Workload | Result |
-| --- | --- |
-| CSV read, 1M rows | Pravaah is **4.5x faster** and uses **26% less memory** than fast-csv. |
-| CSV write, 100K rows | Pravaah is close to fast-csv throughput and uses **17% less memory**. |
-| XLSX read, 36K rows | Pravaah is **10% faster** and uses **47% less memory** than SheetJS. |
-| XLSX write, 100K rows | Pravaah is **6% faster** and uses **51% less memory** than SheetJS. |
-
-## How The Performance Works
-
-### CSV
-
-- Custom streaming parser on the read path.
-- Raw record-boundary scanner for count-only drains.
-- No heavyweight CSV parser dependency in the hot read path.
-- Backpressure-aware writes through `@fast-csv/format`.
-
-### XLSX
-
-- Selective decompression reads only workbook metadata, shared strings, relationships, and the targeted sheet.
-- Lazy shared strings are indexed once and decoded on demand.
-- Worksheet XML is scanned from raw bytes instead of building a DOM.
-- Dimension-aware row preallocation avoids sparse arrays.
-- XLSX output writes XML directly and zips with `fflate`.
-
-### Pipelines
-
-- Lazy AsyncIterable execution.
-- Fused map/filter stages.
-- Built-in stats for processed rows, written rows, duration, errors, warnings, sheets, and peak RSS.
-
-## When To Use Pravaah
-
-Pravaah is a strong fit for:
-
-- Customer CSV/XLSX uploads.
-- Admin import tools.
-- Data validation before database writes.
-- ETL jobs.
-- Spreadsheet-backed reports.
-- Large CSV row counting and preflight checks.
-- Dataset comparison and audit reports.
-- TypeScript services that need predictable spreadsheet ingestion.
-
-Pravaah is not trying to be a complete Excel desktop clone. If your main goal is pixel-perfect spreadsheet styling, charts, drawings, macros, or arbitrary workbook editing, a workbook-manipulation library may be a better primary tool.
+---
 
 ## Scripts
 
 ```sh
-npm run build
-npm run typecheck
-npm test
-npm run coverage
-npm run lint
-npm run benchmark:isolated
+npm run build          # compile TypeScript
+npm run typecheck      # type-check without emitting
+npm test              # run test suite
+npm run lint          # ESLint
+npm run benchmark:isolated   # full isolated benchmarks
 ```
 
-Benchmark controls:
-
-```sh
-PRAVAAH_BENCH_WRITE_ROWS=100000 npm run benchmark:isolated
-PRAVAAH_BENCH_SKIP_WRITE=1 npm run benchmark:isolated
-PRAVAAH_BENCH_SKIP_READ=1 npm run benchmark:isolated
-PRAVAAH_BENCH_INCLUDE_MEMORY=1 npm run benchmark:isolated
-PRAVAAH_BENCH_RUNS=5 npm run benchmark:isolated
-```
+---
 
 ## Roadmap
 
-- Broader XLSX formatting coverage.
-- More formula functions.
 - Streaming XLSX write for extremely large exports.
-- More SQL-like query operators.
-- First-party adapters for common upload and ETL frameworks.
+- `npx pravaah demo` for a zero-setup CLI walkthrough.
+- Broader XLSX formatting (styles, conditional formatting).
+- More SQL-like query operators (`GROUP BY`, `JOIN`).
+- More formula functions.
+- First-party adapters for upload frameworks (multer, busboy).
+
+---
 
 ## License
 

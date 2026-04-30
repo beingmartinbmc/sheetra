@@ -1071,6 +1071,40 @@ describe("Optimization-specific tests", () => {
     expect(rows).toEqual([{ id: 1 }, { id: 3 }]);
   });
 
+  it("parseDetailed skip mode drops invalid rows without collecting issues", async () => {
+    const result = await parseDetailed(
+      Buffer.from("id\n1\nbad\n3\n"),
+      { id: schema.number() },
+      { format: "csv", validation: "skip" },
+    );
+
+    expect(result.rows).toEqual([{ id: 1 }, { id: 3 }]);
+    expect(result.issues).toEqual([]);
+    expect(result.stats.errors).toBe(0);
+  });
+
+  it("validateRows skip mode drops invalid rows without collecting issues", () => {
+    const result = validateRows([{ id: "1" }, { id: "bad" }, { id: "3" }], { id: schema.number() }, { mode: "skip" });
+
+    expect(result.rows).toEqual([{ id: 1 }, { id: 3 }]);
+    expect(result.issues).toEqual([]);
+  });
+
+  it("pipeline cleaning can dedupe rows by key", async () => {
+    const rows = await read([
+      { id: "1", email: " ada@example.com " },
+      { id: "1", email: "ada@example.com" },
+      { id: "2", email: "grace@example.com" },
+    ])
+      .clean({ trim: true, dedupeKey: "id" })
+      .collect();
+
+    expect(rows).toEqual([
+      { id: "1", email: "ada@example.com" },
+      { id: "2", email: "grace@example.com" },
+    ]);
+  });
+
   it("custom CSV parser with headerless reading", async () => {
     const collected: unknown[] = [];
     for await (const row of readCsv(Buffer.from("1,2\n3,4\n"), { headers: false })) {
