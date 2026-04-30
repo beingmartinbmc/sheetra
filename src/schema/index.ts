@@ -190,7 +190,7 @@ export function validateRows<T extends SchemaDefinition>(
     const result = validateRow(cleaned, definition, { rowNumber });
     if (result.value !== undefined) {
       output.push(result.value);
-    } else {
+    } else if (options.mode !== "skip") {
       issues.push(...result.issues);
       if (options.mode === "fail-fast") throw new PravaahValidationError(result.issues);
     }

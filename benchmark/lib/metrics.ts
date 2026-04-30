@@ -14,7 +14,7 @@ export interface BenchmarkResult {
   suite: string;
   name: string;
   mode: string;
-  format: "csv" | "xlsx" | "mixed" | "memory";
+  format: "csv" | "xlsx" | "xls" | "mixed" | "memory";
   rows: number;
   columns: number;
   fileSizeBytes?: number;

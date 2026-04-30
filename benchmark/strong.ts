@@ -422,13 +422,14 @@ async function fileSizeCases(): Promise<BenchmarkCase[]> {
   for (const file of files) {
     const size = (await stat(file)).size;
     const extension = extname(file);
-    if (![".csv", ".xlsx"].includes(extension)) continue;
+    if (![".csv", ".xlsx", ".xls"].includes(extension)) continue;
 
+    const format = extension === ".csv" ? "csv" : extension === ".xls" ? "xls" : "xlsx";
     cases.push({
       suite: "file-size",
       name: basename(file),
       mode: "pravaah",
-      format: extension === ".csv" ? "csv" : "xlsx",
+      format,
       rows: 0,
       columns: 0,
       fileSizeBytes: size,
@@ -440,7 +441,7 @@ async function fileSizeCases(): Promise<BenchmarkCase[]> {
         suite: "file-size",
         name: basename(file),
         mode: "sheetjs in-memory",
-        format: extension === ".csv" ? "csv" : "xlsx",
+        format,
         rows: 0,
         columns: 0,
         fileSizeBytes: size,

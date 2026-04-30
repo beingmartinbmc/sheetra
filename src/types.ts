@@ -3,7 +3,7 @@ export type CellValue = unknown;
 export type Row = Record<string, unknown>;
 export type RowLike = Row | unknown[];
 
-export type PravaahFormat = "xlsx" | "csv" | "json";
+export type PravaahFormat = "xlsx" | "xls" | "csv" | "json";
 export type ValidationMode = "fail-fast" | "collect" | "skip";
 
 export interface RowContext {
@@ -53,7 +53,7 @@ export interface ReadOptions {
 }
 
 export interface WriteOptions {
-  format?: PravaahFormat;
+  format?: Exclude<PravaahFormat, "xls">;
   sheetName?: string;
   headers?: string[];
   delimiter?: string;
