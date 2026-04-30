@@ -114,7 +114,9 @@ if (aggregated.length === 0) {
 }
 
 function readWorkloadLabel(extension: string): string {
-  return extension === ".csv" ? "CSV Read" : "XLSX Read";
+  if (extension === ".csv") return "CSV Read";
+  if (extension === ".xls") return "XLS Read";
+  return "XLSX Read";
 }
 
 async function discoverFiles(): Promise<string[]> {
@@ -127,7 +129,7 @@ async function discoverFiles(): Promise<string[]> {
   }
   return entries
     .map((entry) => join(fixtureDir, entry))
-    .filter((path) => [".csv", ".xlsx"].includes(extname(path).toLowerCase()))
+    .filter((path) => [".csv", ".xlsx", ".xls"].includes(extname(path).toLowerCase()))
     .filter((path) => selectedFile === undefined || basename(path) === selectedFile);
 }
 
@@ -149,6 +151,9 @@ function readEnginesFor(extension: string): EngineSpec[] {
       { name: "fastcsv" },
       { name: "sheetjs", heavy: true },
     ];
+  }
+  if (extension === ".xls") {
+    return [{ name: "pravaah" }, { name: "sheetjs" }];
   }
   return [{ name: "pravaah" }, { name: "sheetjs" }, { name: "exceljs" }];
 }
