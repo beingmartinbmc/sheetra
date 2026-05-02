@@ -1,4 +1,5 @@
 import { read } from "../pipeline/index.js";
+import { rowIdentity } from "../key.js";
 import type { Row } from "../types.js";
 
 export interface QueryOptions {
@@ -13,12 +14,17 @@ export async function query(source: QueryOptions["source"], sql: string): Promis
 
   for await (const row of rows) {
     if (plan.where === undefined || matchesWhere(row as Row, plan.where)) {
-      output.push(project(row as Row, plan.columns));
-      if (plan.orderBy === undefined && plan.limit !== undefined && output.length >= plan.limit) break;
+      const projected = project(row as Row, plan.columns);
+      if (plan.orderBy !== undefined && plan.limit !== undefined) {
+        insertTopRow(output, projected, plan.orderBy, plan.limit);
+      } else {
+        output.push(projected);
+        if (plan.orderBy === undefined && plan.limit !== undefined && output.length >= plan.limit) break;
+      }
     }
   }
 
-  const ordered = plan.orderBy === undefined ? output : sortRows(output, plan.orderBy);
+  const ordered = plan.orderBy === undefined || plan.limit !== undefined ? output : sortRows(output, plan.orderBy);
   return plan.limit === undefined ? ordered : ordered.slice(0, plan.limit);
 }
 
@@ -27,7 +33,7 @@ export function createIndex(rows: Iterable<Row>, key: string | string[]): Map<st
   const index = new Map<string, Row[]>();
 
   for (const row of rows) {
-    const id = keys.map((name) => String(row[name] ?? "")).join("\u0000");
+    const id = rowIdentity(row, keys);
     const bucket = index.get(id) ?? [];
     bucket.push(row);
     index.set(id, bucket);
@@ -42,7 +48,7 @@ export function joinRows(left: Iterable<Row>, right: Iterable<Row>, key: string 
   const joined: Row[] = [];
 
   for (const row of left) {
-    const id = keys.map((name) => String(row[name] ?? "")).join("\u0000");
+    const id = rowIdentity(row, keys);
     for (const match of index.get(id) ?? []) joined.push({ ...row, ...match });
   }
 
@@ -128,10 +134,21 @@ function project(row: Row, columns: string[]): Row {
 
 function sortRows(rows: Row[], orderBy: OrderByClause): Row[] {
   return [...rows].sort((left, right) => {
-    const a = left[orderBy.column];
-    const b = right[orderBy.column];
-    const direction = orderBy.direction === "asc" ? 1 : -1;
-    if (typeof a === "number" && typeof b === "number") return (a - b) * direction;
-    return String(a ?? "").localeCompare(String(b ?? "")) * direction;
+    return compareRows(left, right, orderBy);
   });
+}
+
+function insertTopRow(rows: Row[], row: Row, orderBy: OrderByClause, limit: number): void {
+  let index = 0;
+  while (index < rows.length && compareRows(rows[index]!, row, orderBy) <= 0) index += 1;
+  rows.splice(index, 0, row);
+  if (rows.length > limit) rows.pop();
+}
+
+function compareRows(left: Row, right: Row, orderBy: OrderByClause): number {
+  const a = left[orderBy.column];
+  const b = right[orderBy.column];
+  const direction = orderBy.direction === "asc" ? 1 : -1;
+  if (typeof a === "number" && typeof b === "number") return (a - b) * direction;
+  return String(a ?? "").localeCompare(String(b ?? "")) * direction;
 }

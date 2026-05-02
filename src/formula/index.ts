@@ -88,12 +88,8 @@ function resolveArg(arg: string, row: Row): CellValue {
 }
 
 function evaluateExpression(source: string, row: Row): CellValue {
-  const replaced = source.replace(/\b[A-Za-z_][A-Za-z0-9_]*\b/g, (token) => {
-    const value = row[token];
-    return typeof value === "number" ? String(value) : token;
-  });
-  if (!/^[\d+\-*/().\s]+$/.test(replaced)) return source;
-  return Function(`"use strict"; return (${replaced});`)() as number;
+  const parser = new ExpressionParser(source, row);
+  return parser.parse() ?? source;
 }
 
 function numbers(args: CellValue[]): number[] {
@@ -113,4 +109,89 @@ function valueToString(value: CellValue): string {
   if (Array.isArray(value)) return value.map(valueToString).join("");
   if (value instanceof Date) return value.toISOString();
   return value === null ? "" : String(value);
+}
+
+class ExpressionParser {
+  private cursor = 0;
+
+  constructor(
+    private readonly source: string,
+    private readonly row: Row,
+  ) {}
+
+  parse(): number | undefined {
+    const value = this.expression();
+    this.skipWhitespace();
+    return value !== undefined && this.cursor === this.source.length && Number.isFinite(value) ? value : undefined;
+  }
+
+  private expression(): number | undefined {
+    let value = this.term();
+    if (value === undefined) return undefined;
+
+    while (true) {
+      this.skipWhitespace();
+      const op = this.source[this.cursor];
+      if (op !== "+" && op !== "-") return value;
+      this.cursor += 1;
+      const right = this.term();
+      if (right === undefined) return undefined;
+      value = op === "+" ? value + right : value - right;
+    }
+  }
+
+  private term(): number | undefined {
+    let value = this.factor();
+    if (value === undefined) return undefined;
+
+    while (true) {
+      this.skipWhitespace();
+      const op = this.source[this.cursor];
+      if (op !== "*" && op !== "/") return value;
+      this.cursor += 1;
+      const right = this.factor();
+      if (right === undefined) return undefined;
+      value = op === "*" ? value * right : value / right;
+    }
+  }
+
+  private factor(): number | undefined {
+    this.skipWhitespace();
+    const op = this.source[this.cursor];
+    if (op === "+" || op === "-") {
+      this.cursor += 1;
+      const value = this.factor();
+      return value === undefined ? undefined : op === "-" ? -value : value;
+    }
+    if (op === "(") {
+      this.cursor += 1;
+      const value = this.expression();
+      this.skipWhitespace();
+      if (this.source[this.cursor] !== ")") return undefined;
+      this.cursor += 1;
+      return value;
+    }
+    return this.number() ?? this.identifier();
+  }
+
+  private number(): number | undefined {
+    this.skipWhitespace();
+    const match = /^\d+(?:\.\d+)?/.exec(this.source.slice(this.cursor));
+    if (match === null) return undefined;
+    this.cursor += match[0].length;
+    return Number(match[0]);
+  }
+
+  private identifier(): number | undefined {
+    this.skipWhitespace();
+    const match = /^[A-Za-z_][A-Za-z0-9_]*/.exec(this.source.slice(this.cursor));
+    if (match === null) return undefined;
+    this.cursor += match[0].length;
+    const value = this.row[match[0]];
+    return typeof value === "number" ? value : undefined;
+  }
+
+  private skipWhitespace(): void {
+    while (/\s/.test(this.source[this.cursor] ?? "")) this.cursor += 1;
+  }
 }

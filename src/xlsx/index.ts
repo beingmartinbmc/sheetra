@@ -1,12 +1,15 @@
 import { readFile, writeFile } from "node:fs/promises";
-import { strFromU8, strToU8, unzipSync, zipSync } from "fflate";
+import { strFromU8, strToU8, unzipSync, zip } from "fflate";
 import type { CellValue, ReadOptions, Row, RowLike, WriteOptions } from "../types.js";
 
 const NEEDED_PATHS = new Set([
   "xl/workbook.xml",
   "xl/_rels/workbook.xml.rels",
   "xl/sharedStrings.xml",
+  "xl/styles.xml",
 ]);
+
+const CELL_BRAND = Symbol.for("pravaah.cell");
 
 function selectiveUnzip(
   bytes: Uint8Array,
@@ -44,44 +47,22 @@ export async function* readXlsx(source: string | Buffer, options: ReadOptions = 
 
   const metaFiles = selectiveUnzip(raw, new Set());
   const hasWorkbookMeta = metaFiles["xl/workbook.xml"] !== undefined;
+  const initialFiles = hasWorkbookMeta ? metaFiles : fullUnzip(raw);
+  const sheetEntries = workbookSheets(initialFiles);
+  const target =
+    typeof options.sheet === "string"
+      ? sheetEntries.find((entry) => entry.name === options.sheet)
+      : sheetEntries[typeof options.sheet === "number" ? options.sheet : 0];
 
-  let files: Record<string, Uint8Array>;
-  let sheetEntries: Array<{ name: string; path: string }>;
+  if (target === undefined) throw new Error(`Worksheet not found: ${String(options.sheet ?? 0)}`);
 
-  if (hasWorkbookMeta) {
-    sheetEntries = workbookSheets(metaFiles);
-    const target =
-      typeof options.sheet === "string"
-        ? sheetEntries.find((entry) => entry.name === options.sheet)
-        : sheetEntries[typeof options.sheet === "number" ? options.sheet : 0];
+  const files = hasWorkbookMeta ? selectiveUnzip(raw, new Set([target.path])) : initialFiles;
+  const sheetData = files[target.path];
+  if (sheetData === undefined) throw new Error(`Worksheet XML not found: ${target.path}`);
 
-    if (target === undefined) throw new Error(`Worksheet not found: ${String(options.sheet ?? 0)}`);
-
-    files = selectiveUnzip(raw, new Set([target.path]));
-    const sheetData = files[target.path];
-    if (sheetData === undefined) throw new Error(`Worksheet XML not found: ${target.path}`);
-
-    const ssFile = files["xl/sharedStrings.xml"];
-    const sharedStrings = ssFile !== undefined ? new LazySharedStrings(ssFile) : new LazySharedStrings(undefined);
-    yield* iterateWorksheetRows(sheetData, sharedStrings, options);
-  } else {
-    files = fullUnzip(raw);
-    sheetEntries = workbookSheets(files);
-
-    const target =
-      typeof options.sheet === "string"
-        ? sheetEntries.find((entry) => entry.name === options.sheet)
-        : sheetEntries[typeof options.sheet === "number" ? options.sheet : 0];
-
-    if (target === undefined) throw new Error(`Worksheet not found: ${String(options.sheet ?? 0)}`);
-
-    const sheetData = files[target.path];
-    if (sheetData === undefined) throw new Error(`Worksheet XML not found: ${target.path}`);
-
-    const ssFile = files["xl/sharedStrings.xml"];
-    const sharedStrings = ssFile !== undefined ? new LazySharedStrings(ssFile) : new LazySharedStrings(undefined);
-    yield* iterateWorksheetRows(sheetData, sharedStrings, options);
-  }
+  const ssFile = files["xl/sharedStrings.xml"];
+  const sharedStrings = ssFile !== undefined ? new LazySharedStrings(ssFile) : new LazySharedStrings(undefined);
+  yield* iterateWorksheetRows(sheetData, sharedStrings, options, parseWorkbookStyles(files));
 }
 
 export async function writeXlsx(
@@ -105,13 +86,14 @@ export async function readWorkbook(source: string | Buffer, options: ReadOptions
   const files = fullUnzip(new Uint8Array(bytes));
   const ssFile = files["xl/sharedStrings.xml"];
   const sharedStrings = ssFile !== undefined ? new LazySharedStrings(ssFile) : new LazySharedStrings(undefined);
+  const styles = parseWorkbookStyles(files);
   const sheets = workbookSheets(files);
 
   return workbook(
     sheets.map((sheet) => {
       const file = files[sheet.path];
       if (file === undefined) throw new Error(`Worksheet XML not found: ${sheet.path}`);
-      return worksheet(sheet.name, readWorksheetRows(file, sharedStrings, options));
+      return worksheet(sheet.name, readWorksheetRows(file, sharedStrings, options, styles));
     }),
   );
 }
@@ -130,11 +112,11 @@ export async function writeWorkbook(book: Workbook, destination: string, options
 
   sheets.forEach((sheet, index) => {
     const headers = options.headers ?? inferHeaders(sheet.rows);
-    const sheetRows = [headers, ...sheet.rows.map((row) => headers.map((header) => row[header] ?? null))];
+    const sheetRows = [headers, ...sheet.rows.map((row) => rowToObject(row, headers))];
     files[`xl/worksheets/sheet${index + 1}.xml`] = strToU8(worksheetXml(sheetRows, sheet));
   });
 
-  await writeFile(destination, Buffer.from(zipSync(files, { level: 6 })));
+  await writeFile(destination, Buffer.from(await zipAsync(files)));
 }
 
 export interface Workbook {
@@ -144,7 +126,7 @@ export interface Workbook {
 
 export interface Worksheet {
   name: string;
-  rows: Row[];
+  rows: RowLike[];
   columns: ColumnDefinition[];
   merges: string[];
   validations: DataValidation[];
@@ -172,11 +154,13 @@ export interface FormulaCell {
   formula: string;
   result?: unknown;
   style?: CellStyle | undefined;
+  readonly [CELL_BRAND]?: "formula";
 }
 
 export interface StyledCell {
   value: unknown;
   style?: CellStyle | undefined;
+  readonly [CELL_BRAND]?: "styled";
 }
 
 export interface DataValidation {
@@ -213,19 +197,25 @@ export function workbook(sheets: Worksheet[] = []): Workbook {
   return { sheets, properties: {} };
 }
 
-export function worksheet(name: string, rows: Row[] = []): Worksheet {
+export function worksheet(name: string, rows: RowLike[] = []): Worksheet {
   return { name, rows, columns: [], merges: [], validations: [], tables: [], comments: [], hyperlinks: [] };
 }
 
 export function cell(value: unknown, style?: CellStyle): StyledCell {
-  return style === undefined ? { value } : { value, style };
+  const output: StyledCell = style === undefined ? { value } : { value, style };
+  return brandCell(output, "styled");
 }
 
 export function formula(formula: string, result?: unknown, style?: CellStyle): FormulaCell {
   const output: FormulaCell = { formula };
   if (result !== undefined) output.result = result;
   if (style !== undefined) output.style = style;
-  return output;
+  return brandCell(output, "formula");
+}
+
+function brandCell<T extends FormulaCell | StyledCell>(value: T, kind: NonNullable<T[typeof CELL_BRAND]>): T {
+  Object.defineProperty(value, CELL_BRAND, { value: kind, enumerable: false });
+  return value;
 }
 
 // --- Lazy shared-string table: builds offset index on first access ---
@@ -352,6 +342,32 @@ function normalizeWorksheetTarget(target: string): string {
   return `xl/${target}`;
 }
 
+function parseWorkbookStyles(files: Record<string, Uint8Array>): WorkbookStyles {
+  const stylesFile = files["xl/styles.xml"];
+  if (stylesFile === undefined) return { dateStyleIds: new Set() };
+  const xml = strFromU8(stylesFile);
+  const dateNumFmtIds = new Set<number>([14, 15, 16, 17, 22, 27, 30, 36, 45, 46, 47, 50, 57]);
+  for (const tag of xml.match(/<numFmt\b[^>]*>/g) ?? []) {
+    const id = Number(readXmlAttribute(tag, "numFmtId"));
+    const code = readXmlAttribute(tag, "formatCode") ?? "";
+    if (Number.isFinite(id) && /[dyhmse]/i.test(code)) dateNumFmtIds.add(id);
+  }
+
+  const dateStyleIds = new Set<number>();
+  const cellXfsStart = xml.indexOf("<cellXfs");
+  const cellXfsEnd = cellXfsStart === -1 ? -1 : xml.indexOf("</cellXfs>", cellXfsStart);
+  if (cellXfsStart === -1 || cellXfsEnd === -1) return { dateStyleIds };
+
+  let styleIndex = 0;
+  const cellXfsXml = xml.slice(cellXfsStart, cellXfsEnd);
+  for (const tag of cellXfsXml.match(/<xf\b[^>]*>/g) ?? []) {
+    const id = Number(readXmlAttribute(tag, "numFmtId"));
+    if (dateNumFmtIds.has(id)) dateStyleIds.add(styleIndex);
+    styleIndex += 1;
+  }
+  return { dateStyleIds };
+}
+
 // --- Buffer-based worksheet scanning ---
 
 const SLASH = 0x2F; // /
@@ -373,18 +389,22 @@ function bufSliceToString(buf: Uint8Array, start: number, end: number): string {
   return new TextDecoder().decode(buf.subarray(start, end));
 }
 
-function readWorksheetRows(data: Uint8Array, sharedStrings: LazySharedStrings, options: ReadOptions): Row[] {
-  return Array.from(iterateWorksheetRows(data, sharedStrings, options));
+interface WorkbookStyles {
+  dateStyleIds: Set<number>;
 }
 
-function* iterateWorksheetRows(data: Uint8Array, sharedStrings: LazySharedStrings, options: ReadOptions): Iterable<Row> {
+function readWorksheetRows(data: Uint8Array, sharedStrings: LazySharedStrings, options: ReadOptions, styles: WorkbookStyles): Row[] {
+  return Array.from(iterateWorksheetRows(data, sharedStrings, options, styles));
+}
+
+function* iterateWorksheetRows(data: Uint8Array, sharedStrings: LazySharedStrings, options: ReadOptions, styles: WorkbookStyles): Iterable<Row> {
   const useArrayHeaders = Array.isArray(options.headers) && options.headers.length > 0;
   const headerless = options.headers === false;
   let headers = useArrayHeaders ? (options.headers as string[]) : undefined;
 
   const colCount = parseDimensionColumnCount(data);
 
-  for (const values of iterateWorksheetValueRows(data, sharedStrings, options, colCount)) {
+  for (const values of iterateWorksheetValueRows(data, sharedStrings, options, colCount, styles)) {
     if (headers === undefined && !headerless) {
       headers = new Array(values.length);
       for (let index = 0; index < values.length; index += 1) headers[index] = String(values[index] ?? `_${index + 1}`);
@@ -424,6 +444,7 @@ function* iterateWorksheetValueRows(
   sharedStrings: LazySharedStrings,
   options: ReadOptions,
   colCount: number | undefined,
+  styles: WorkbookStyles,
 ): Iterable<CellValue[]> {
   const sdStart = bufIndexOf(data, "<sheetData", 0);
   if (sdStart === -1) return;
@@ -451,7 +472,7 @@ function* iterateWorksheetValueRows(
     if (rowEnd === -1) return;
 
     const rowXml = bufSliceToString(data, rowOpenEnd + 1, rowEnd);
-    yield readWorksheetValueRow(rowXml, sharedStrings, options, colCount);
+    yield readWorksheetValueRow(rowXml, sharedStrings, options, colCount, styles);
     cursor = rowEnd + 6;
   }
 }
@@ -461,6 +482,7 @@ function readWorksheetValueRow(
   sharedStrings: LazySharedStrings,
   options: ReadOptions,
   colCount: number | undefined,
+  styles: WorkbookStyles,
 ): CellValue[] {
   const values: CellValue[] = colCount !== undefined ? new Array<CellValue>(colCount).fill(undefined as unknown as CellValue) : [];
   let cursor = 0;
@@ -488,7 +510,7 @@ function readWorksheetValueRow(
     const cellEnd = rowXml.indexOf("</c>", cellOpenEnd);
     if (cellEnd === -1) break;
 
-    values[columnIndex] = decodeCellXml(attrs, rowXml.slice(cellOpenEnd + 1, cellEnd), sharedStrings, options);
+    values[columnIndex] = decodeCellXml(attrs, rowXml.slice(cellOpenEnd + 1, cellEnd), sharedStrings, options, styles);
     cursor = cellEnd + 4;
   }
   return values;
@@ -497,14 +519,21 @@ function readWorksheetValueRow(
 interface CellAttributes {
   r?: string | undefined;
   t?: string | undefined;
+  s?: number | undefined;
 }
 
-function decodeCellXml(attrs: CellAttributes, innerXml: string, sharedStrings: LazySharedStrings, options: ReadOptions): CellValue {
+function decodeCellXml(
+  attrs: CellAttributes,
+  innerXml: string,
+  sharedStrings: LazySharedStrings,
+  options: ReadOptions,
+  styles: WorkbookStyles,
+): CellValue {
   const formulaText = firstTagText(innerXml, "f");
   if (formulaText !== undefined && options.formulas === "preserve") {
     return formula(
       formulaText.startsWith("=") ? formulaText.slice(1) : formulaText,
-      decodeCellXml(attrs, innerXml, sharedStrings, { ...options, formulas: "values" }),
+      decodeCellXml(attrs, innerXml, sharedStrings, { ...options, formulas: "values" }, styles),
     );
   }
   if (attrs.t === "s") return sharedStrings.get(Number(firstTagText(innerXml, "v"))) ?? null;
@@ -514,15 +543,18 @@ function decodeCellXml(attrs: CellAttributes, innerXml: string, sharedStrings: L
   const rawValue = firstTagText(innerXml, "v");
   if (rawValue === undefined) return null;
   const number = Number(rawValue);
-  return Number.isFinite(number) ? number : rawValue;
+  if (!Number.isFinite(number)) return rawValue;
+  return attrs.s !== undefined && styles.dateStyleIds.has(attrs.s) ? excelSerialDate(number) : number;
 }
 
 function parseCellAttributes(tag: string): CellAttributes {
   const attrs: CellAttributes = {};
   const ref = readXmlAttribute(tag, "r");
   const type = readXmlAttribute(tag, "t");
+  const style = readXmlAttribute(tag, "s");
   if (ref !== undefined) attrs.r = ref;
   if (type !== undefined) attrs.t = type;
+  if (style !== undefined) attrs.s = Number(style);
   return attrs;
 }
 
@@ -584,6 +616,20 @@ async function* toAsync<T>(rows: AsyncIterable<T> | Iterable<T>): AsyncIterable<
   yield* rows;
 }
 
+function zipAsync(files: Record<string, Uint8Array>): Promise<Uint8Array> {
+  return new Promise((resolve, reject) => {
+    zip(files, { level: 6 }, (error, data) => {
+      if (error !== null) reject(error);
+      else resolve(data);
+    });
+  });
+}
+
+function excelSerialDate(value: number): Date {
+  const excelEpoch = Date.UTC(1899, 11, 30);
+  return new Date(excelEpoch + value * 24 * 60 * 60 * 1000);
+}
+
 function worksheetXml(rows: RowLike[], sheet?: Worksheet): string {
   const mergeXml =
     sheet !== undefined && sheet.merges.length > 0
@@ -595,7 +641,8 @@ function worksheetXml(rows: RowLike[], sheet?: Worksheet): string {
       : "";
   const autoFilterXml =
     sheet !== undefined && sheet.tables[0] !== undefined ? `  <autoFilter ref="${escapeXml(sheet.tables[0].range)}"/>\n` : "";
-  const paneXml = sheet?.frozen === undefined ? "" : `  <sheetViews><sheetView workbookViewId="0"><pane ${freezeAttrs(sheet.frozen)}/></sheetView></sheetViews>\n`;
+  const paneAttrs = sheet?.frozen === undefined ? "" : freezeAttrs(sheet.frozen);
+  const paneXml = paneAttrs === "" ? "" : `  <sheetViews><sheetView workbookViewId="0"><pane ${paneAttrs}/></sheetView></sheetViews>\n`;
 
   return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
@@ -634,11 +681,11 @@ function normalizeCell(value: unknown): unknown {
 }
 
 function isFormulaCell(value: unknown): value is FormulaCell {
-  return typeof value === "object" && value !== null && "formula" in value;
+  return typeof value === "object" && value !== null && (value as FormulaCell)[CELL_BRAND] === "formula";
 }
 
 function isStyledCell(value: unknown): value is StyledCell {
-  return typeof value === "object" && value !== null && "value" in value;
+  return typeof value === "object" && value !== null && (value as StyledCell)[CELL_BRAND] === "styled";
 }
 
 function columnsXml(columns: ColumnDefinition[] | undefined): string {
@@ -658,6 +705,7 @@ function dataValidationXml(validation: DataValidation): string {
 }
 
 function freezeAttrs(frozen: FreezePane): string {
+  if (frozen.xSplit === undefined && frozen.ySplit === undefined && frozen.topLeftCell === undefined) return "";
   const attrs = [
     frozen.xSplit === undefined ? undefined : `xSplit="${frozen.xSplit}"`,
     frozen.ySplit === undefined ? undefined : `ySplit="${frozen.ySplit}"`,

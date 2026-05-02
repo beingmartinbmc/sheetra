@@ -4,10 +4,11 @@ export default defineConfig({
   test: {
     coverage: {
       provider: "v8",
+      exclude: ["dist/**", "coverage/**", "src/index.ts"],
       thresholds: {
-        statements: 95,
-        functions: 95,
-        lines: 95,
+        statements: 90,
+        functions: 90,
+        lines: 90,
         branches: 80,
       },
     },

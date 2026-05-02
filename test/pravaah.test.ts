@@ -27,6 +27,7 @@ import {
   query,
   read,
   readCsv,
+  readXls,
   readWorkbook,
   schema,
   validateRows,
@@ -280,8 +281,8 @@ describe("Pravaah differentiators", () => {
     await rm(dir, { recursive: true, force: true });
   });
 
-  it("runs mapper work in worker threads", async () => {
-    await expect(workerMap([{ value: 2 }, { value: 3 }], "(row) => ({ value: row.value * 2 })", { concurrency: 2 })).resolves.toEqual([
+  it("runs mapper work with bounded concurrency", async () => {
+    await expect(workerMap([{ value: 2 }, { value: 3 }], (row) => ({ value: row.value * 2 }), { concurrency: 2 })).resolves.toEqual([
       { value: 4 },
       { value: 6 },
     ]);
@@ -412,11 +413,29 @@ describe("Query, diff, formula, plugins, and perf utilities", () => {
     await expect(query(rows, "SELECT name WHERE score >= 8")).resolves.toHaveLength(2);
     await expect(query(rows, "SELECT name WHERE score < 8")).resolves.toEqual([{ name: "Grace" }]);
     await expect(query(rows, "SELECT name WHERE score != 3")).resolves.toHaveLength(2);
+    await expect(query(rows, "SELECT name WHERE score = 3")).resolves.toEqual([{ name: "Grace" }]);
+    await expect(query(rows, "SELECT name WHERE score > 3")).resolves.toHaveLength(2);
+    await expect(query(rows, "SELECT name WHERE joined = 1767225600000")).resolves.toEqual([{ name: "Ada" }]);
+    await expect(query(rows, "SELECT * LIMIT 1")).resolves.toEqual([rows[0]]);
+    await expect(query(rows, "SELECT name ORDER BY name LIMIT 2")).resolves.toEqual([{ name: "Ada" }, { name: "Grace" }]);
+    await expect(query(rows, "SELECT name ORDER BY name DESC LIMIT 2")).resolves.toEqual([{ name: "Linus" }, { name: "Grace" }]);
     await expect(query(rows, "SELECT name WHERE name > 1 LIMIT 10")).resolves.toEqual([]);
+    await expect(query(rows, "SELECT name WHERE score BETWEEN 1")).rejects.toThrow("Unsupported WHERE clause");
     await expect(query(rows, "bad sql")).rejects.toThrow("Unsupported query");
 
     const index = createIndex(rows, ["team", "score"]);
-    expect(index.get("a\u000010")).toEqual([rows[0]]);
+    expect(index.get("string:a\u0000number:10")).toEqual([rows[0]]);
+    const mixedIndex = createIndex(
+      [
+        { id: null, label: "null" },
+        { id: undefined, label: "undefined" },
+        { id: "", label: "empty" },
+      ],
+      "id",
+    );
+    expect(mixedIndex.get("null:")?.[0]?.label).toBe("null");
+    expect(mixedIndex.get("undefined:")?.[0]?.label).toBe("undefined");
+    expect(mixedIndex.get("string:")?.[0]?.label).toBe("empty");
     expect(joinRows([{ id: 1, left: true }], [{ id: 1, right: true }, { id: 2, right: false }], "id")).toEqual([
       { id: 1, left: true, right: true },
     ]);
@@ -444,6 +463,11 @@ describe("Query, diff, formula, plugins, and perf utilities", () => {
     expect(result.changed[0]?.changedColumns.sort()).toEqual(["extra", "value"]);
     expect(result.added).toHaveLength(1);
     expect(result.removed).toHaveLength(1);
+
+    expect(diff([{ id: 1, meta: { b: 2, a: 1 }, values: [1, 2] }], [{ id: 1, meta: { a: 1, b: 2 }, values: [1, 2] }], { key: "id" }).unchanged).toBe(1);
+    expect(diff([{ id: 1, values: [1, 2] }], [{ id: 1, values: [1, 3] }], { key: "id" }).changed[0]?.changedColumns).toEqual(["values"]);
+    expect(diff([{ id: 1, values: [1] }], [{ id: 1, values: [1, 2] }], { key: "id" }).changed[0]?.changedColumns).toEqual(["values"]);
+    expect(diff([{ id: 1, date: new Date("2026-01-01") }], [{ id: 1, date: "2026-01-01" }], { key: "id" }).changed[0]?.changedColumns).toEqual(["date"]);
 
     await writeDiffReport(result, file);
     const text = await readFile(file, "utf8");
@@ -490,6 +514,9 @@ describe("Query, diff, formula, plugins, and perf utilities", () => {
     expect(registry.formulas().SCORE?.([1])).toBe(2);
     expect(registry.validate({ valid: false })).toHaveLength(1);
     expect(registry.validateRows([{ valid: true }, { valid: false }])).toHaveLength(1);
+    expect(new PluginRegistry().formulas()).toEqual({});
+    expect(new PluginRegistry().validators()).toEqual([]);
+    expect(new PluginRegistry().validateRows([])).toEqual([]);
     expect(plugins.list()).toEqual([]);
 
     const stats = createStats();
@@ -503,6 +530,14 @@ describe("Query, diff, formula, plugins, and perf utilities", () => {
       { ...createStats(), rowsProcessed: 3, rowsWritten: 4, errors: 2, warnings: 2, sheets: ["A", "B"], peakRssBytes: 2 },
     );
     expect(merged).toMatchObject({ rowsProcessed: 4, rowsWritten: 6, errors: 3, warnings: 3, sheets: ["A", "B"] });
+    const openEnded = mergeStats({ ...createStats(), startedAt: 10, sheets: [] }, { ...createStats(), startedAt: 20, sheets: [] });
+    expect(openEnded.endedAt).toBeUndefined();
+    const alreadyEnded = mergeStats({ ...createStats(), startedAt: 10, endedAt: 11, sheets: [] }, { ...createStats(), startedAt: 5, endedAt: 12, sheets: [] });
+    expect(alreadyEnded.durationMs).toBe(7);
+    const noPeak = createStats();
+    noPeak.peakRssBytes = undefined;
+    observeMemory(noPeak);
+    expect(noPeak.peakRssBytes).toBeGreaterThan(0);
     expect(formatBytes(10)).toBe("10B");
     expect(formatBytes(2048)).toBe("2.0KB");
     expect(formatBytes(2 * 1024 * 1024)).toBe("2.0MB");
@@ -557,7 +592,7 @@ describe("Additional pipeline, CSV, and XLSX coverage", () => {
     await rm(dir, { recursive: true, force: true });
   });
 
-  it("covers pipeline take, clean passthrough, schema warnings, and schema non-row failures", async () => {
+  it("covers pipeline take, clean passthrough, collected schema issues, and schema non-row failures", async () => {
     const warnings: string[] = [];
     const originalEmitWarning = process.emitWarning;
     process.emitWarning = ((warning: string | Error, options?: string | NodeJS.EmitWarningOptions) => {
@@ -568,8 +603,9 @@ describe("Additional pipeline, CSV, and XLSX coverage", () => {
 
     try {
       await expect(read([[1, 2]]).schema({ id: schema.number() }).collect()).rejects.toThrow("Pravaah validation failed");
-      await read([{ id: "bad" }]).schema({ id: schema.number() }).drain();
-      expect(warnings).toContain("id must be number");
+      const stats = await read([{ id: "bad" }]).schema({ id: schema.number() }).drain();
+      expect(stats.errors).toBe(1);
+      expect(warnings).toEqual([]);
     } finally {
       process.emitWarning = originalEmitWarning;
     }
@@ -727,13 +763,51 @@ describe("Additional pipeline, CSV, and XLSX coverage", () => {
       yield { value: 2 };
     }
 
-    await expect(workerMap(rows(), "(row, index) => ({ value: row.value + index })", { concurrency: 1 })).resolves.toEqual([
+    await expect(workerMap(rows(), (row, index) => ({ value: row.value + index }), { concurrency: 1 })).resolves.toEqual([
       { value: 1 },
       { value: 3 },
     ]);
-    await expect(workerMap([{ value: 1 }], "() => { throw new Error('boom') }", { concurrency: 1 })).rejects.toThrow(
+    await expect(workerMap([{ value: 1 }], () => { throw new Error("boom"); }, { concurrency: 1 })).rejects.toThrow(
       "boom",
     );
+  });
+
+  it("runs module-backed worker mappers and reports missing exports", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "pravaah-worker-"));
+    const mapperFile = join(dir, "mapper.mjs");
+    await writeFile(mapperFile, "export function transform(row, index) { return { value: row.value + index }; }\n");
+
+    await expect(workerMap([{ value: 2 }, { value: 3 }], new URL(`file://${mapperFile}`), { concurrency: 1, exportName: "transform" })).resolves.toEqual([
+      { value: 2 },
+      { value: 4 },
+    ]);
+    await expect(workerMap([{ value: 1 }], new URL(`file://${mapperFile}`), { exportName: "missing" })).rejects.toThrow(
+      "Worker mapper export not found",
+    );
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  it("reads XLS buffers and files via the optional xlsx peer", async () => {
+    const xlsx = await import("xlsx");
+    const book = xlsx.utils.book_new();
+    xlsx.utils.book_append_sheet(book, xlsx.utils.aoa_to_sheet([["name", "score"], ["Ada", 10]]), "Leads");
+    const buffer = xlsx.write(book, { type: "buffer", bookType: "xls" }) as Buffer;
+
+    const bufferRows = [];
+    for await (const row of readXls(buffer)) bufferRows.push(row);
+    expect(bufferRows).toEqual([{ name: "Ada", score: 10 }]);
+
+    const dir = await mkdtemp(join(tmpdir(), "pravaah-xls-"));
+    const file = join(dir, "rows.xls");
+    await writeFile(file, buffer);
+
+    const fileRows = [];
+    for await (const row of readXls(file, { sheet: 0 })) fileRows.push(row);
+    expect(fileRows).toEqual([{ name: "Ada", score: 10 }]);
+    await expect(async () => {
+      for await (const row of readXls(buffer, { sheet: "Missing" })) void row;
+    }).rejects.toThrow("Worksheet not found");
+    await rm(dir, { recursive: true, force: true });
   });
 });
 
@@ -1061,7 +1135,7 @@ describe("Optimization-specific tests", () => {
       .map((row) => row)
       .schema({ id: schema.number() })
       .drain();
-    expect(stats.errors).toBe(0);
+    expect(stats.errors).toBe(1);
   });
 
   it("pipeline schema with skip validation mode drops invalid rows silently", async () => {

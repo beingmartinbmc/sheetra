@@ -33,6 +33,9 @@ export function mergeStats(target: ProcessStats, source: ProcessStats): ProcessS
   target.warnings += source.warnings;
   target.peakRssBytes = Math.max(target.peakRssBytes ?? 0, source.peakRssBytes ?? 0);
   target.sheets = Array.from(new Set([...target.sheets, ...source.sheets]));
+  target.startedAt = Math.min(target.startedAt, source.startedAt);
+  if (source.endedAt !== undefined) target.endedAt = Math.max(target.endedAt ?? source.endedAt, source.endedAt);
+  if (target.endedAt !== undefined) target.durationMs = target.endedAt - target.startedAt;
   return target;
 }
 

@@ -5,12 +5,19 @@ export default tseslint.config(
   js.configs.recommended,
   ...tseslint.configs.recommended,
   {
-    ignores: ["dist/**", "coverage/**"],
+    ignores: ["dist/**", "coverage/**", "src/workers/worker-runner.ts"],
   },
   {
     files: ["src/**/*.ts", "test/**/*.ts", "benchmark/**/*.ts"],
     rules: {
       "@typescript-eslint/no-explicit-any": "off",
+    },
+  },
+  {
+    files: ["src/**/*.ts", "test/**/*.ts"],
+    ignores: ["src/xls/index.ts"],
+    rules: {
+      "@typescript-eslint/consistent-type-imports": "error",
     },
   },
 );
