@@ -682,6 +682,12 @@ npm run benchmark:isolated   # full isolated benchmarks
 
 ---
 
+## Other Languages
+
+- **Java:** [`pravaah-java`](https://github.com/beingmartinbmc/pravaah-java) — JVM port of Pravaah for Java/Kotlin/Scala backends.
+
+---
+
 ## Roadmap
 
 - Streaming XLSX write for extremely large exports.
