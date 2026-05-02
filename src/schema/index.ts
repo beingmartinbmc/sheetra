@@ -1,4 +1,5 @@
 import { writeFile } from "node:fs/promises";
+import { rowIdentity } from "../key.js";
 import type { CellValue, CleaningOptions, Row, RowContext, PravaahIssue, ValidationMode } from "../types.js";
 
 export type FieldKind = "string" | "number" | "boolean" | "date" | "email" | "phone" | "any";
@@ -8,7 +9,7 @@ export interface FieldDefinition<T = unknown> {
   optional?: boolean;
   defaultValue?: T;
   coerce?: boolean;
-  validate?: (value: T, row: Row, context: RowContext) => string | void;
+  validate?: { bivarianceHack(value: T, row: Row, context: RowContext): string | void }["bivarianceHack"];
 }
 
 export type SchemaDefinition = Record<string, FieldKind | FieldDefinition>;
@@ -77,27 +78,31 @@ export function normalizeHeader(value: string): string {
 }
 
 export function applyFuzzyHeaders(row: Row, aliases: Record<string, string[]> = {}): Row {
+  if (Object.keys(aliases).length === 0) return row;
   const normalizedEntries = new Map(Object.keys(row).map((key) => [normalizeHeader(key), key]));
-  const next: Row = { ...row };
+  let next: Row | undefined;
 
   for (const [canonical, names] of Object.entries(aliases)) {
-    if (canonical in next) continue;
+    if (canonical in row || next !== undefined && canonical in next) continue;
 
     for (const name of names) {
       const existing = normalizedEntries.get(normalizeHeader(name));
       if (existing !== undefined) {
+        next ??= { ...row };
         next[canonical] = next[existing] ?? null;
         break;
       }
     }
   }
 
-  return next;
+  return next ?? row;
 }
 
 export function cleanRow(row: Row, options: CleaningOptions = {}): Row {
   const withHeaders = applyFuzzyHeaders(row, options.fuzzyHeaders);
+  if (!options.trim && !options.normalizeWhitespace) return withHeaders;
   const cleaned: Row = {};
+  let changed = withHeaders !== row;
 
   for (const [key, value] of Object.entries(withHeaders)) {
     if (typeof value === "string") {
@@ -105,12 +110,13 @@ export function cleanRow(row: Row, options: CleaningOptions = {}): Row {
       if (options.trim) next = next.trim();
       if (options.normalizeWhitespace) next = next.replace(/\s+/g, " ");
       cleaned[key] = next;
+      if (next !== value) changed = true;
     } else {
       cleaned[key] = value;
     }
   }
 
-  return cleaned;
+  return changed ? cleaned : row;
 }
 
 export function cleanRows(rows: Iterable<Row>, options: CleaningOptions = {}): Row[] {
@@ -124,8 +130,7 @@ export function cleanRows(rows: Iterable<Row>, options: CleaningOptions = {}): R
       continue;
     }
 
-    const keys = Array.isArray(options.dedupeKey) ? options.dedupeKey : [options.dedupeKey];
-    const identity = keys.map((key) => String(cleaned[key] ?? "")).join("\u0000");
+    const identity = rowIdentity(cleaned, options.dedupeKey);
     if (!seen.has(identity)) {
       seen.add(identity);
       output.push(cleaned);

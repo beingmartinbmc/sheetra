@@ -1,7 +1,7 @@
 import { createReadStream, createWriteStream } from "node:fs";
 import { Readable } from "node:stream";
 import { finished } from "node:stream/promises";
-import { format } from "@fast-csv/format";
+import { StringDecoder } from "node:string_decoder";
 import { finishStats, createStats, observeMemory } from "../perf/index.js";
 import type { CellValue, ProcessStats, ReadOptions, Row, RowLike, WriteOptions } from "../types.js";
 
@@ -103,18 +103,19 @@ async function* nativeReadCsv(
 ): AsyncIterable<Row> {
   const delimCode = delimiter.charCodeAt(0);
   const stream = typeof source === "string" ? createReadStream(source) : Readable.from(source);
+  const decoder = new StringDecoder("utf8");
 
   let headers: string[] | null = explicitHeaders ?? null;
   const autoHeaders = explicitHeaders === undefined;
   let tail = "";
 
   for await (const chunk of stream as AsyncIterable<Buffer | string>) {
-    const text = tail + (typeof chunk === "string" ? chunk : chunk.toString("utf8"));
+    const text = tail + (typeof chunk === "string" ? chunk : decoder.write(chunk));
     tail = "";
 
     let cursor = 0;
     while (cursor < text.length) {
-      const result = parseNextRecord(text, cursor, delimCode);
+      const result = parseRecord(text, cursor, delimCode, false);
       if (result === null) {
         tail = text.slice(cursor);
         break;
@@ -139,9 +140,11 @@ async function* nativeReadCsv(
     }
   }
 
+  tail += decoder.end();
   if (tail.length > 0) {
-    const fields = parseLastRecord(tail, delimCode);
-    if (fields !== null && !isEmptyRecord(fields)) {
+    const result = parseRecord(tail, 0, delimCode, true);
+    if (result !== null && !isEmptyRecord(result[0])) {
+      const fields = result[0];
       if (autoHeaders && headers === null) {
         return;
       }
@@ -159,10 +162,11 @@ function isEmptyRecord(fields: string[]): boolean {
   return fields.every((f) => f === "");
 }
 
-function parseNextRecord(
+function parseRecord(
   text: string,
   start: number,
   delim: number,
+  endOfInput: boolean,
 ): [string[], number] | null {
   const fields: string[] = [];
   let cursor = start;
@@ -212,62 +216,8 @@ function parseNextRecord(
   }
 
   if (inQuotes) return null;
-
-  return null;
-}
-
-function parseLastRecord(text: string, delim: number): string[] | null {
-  const fields: string[] = [];
-  let cursor = 0;
-  let fieldStart = 0;
-  let inQuotes = false;
-
-  while (cursor < text.length) {
-    const code = text.charCodeAt(cursor);
-
-    if (inQuotes) {
-      if (code === QUOTE) {
-        if (cursor + 1 < text.length && text.charCodeAt(cursor + 1) === QUOTE) {
-          cursor += 2;
-          continue;
-        }
-        inQuotes = false;
-        cursor += 1;
-        continue;
-      }
-      cursor += 1;
-      continue;
-    }
-
-    if (code === QUOTE && cursor === fieldStart) {
-      inQuotes = true;
-      cursor += 1;
-      continue;
-    }
-
-    if (code === delim) {
-      fields.push(extractField(text, fieldStart, cursor));
-      cursor += 1;
-      fieldStart = cursor;
-      continue;
-    }
-
-    if (code === CR || code === LF) {
-      fields.push(extractField(text, fieldStart, cursor));
-      cursor += 1;
-      if (code === CR && cursor < text.length && text.charCodeAt(cursor) === LF) {
-        cursor += 1;
-      }
-      fieldStart = cursor;
-      continue;
-    }
-
-    cursor += 1;
-  }
-
-  if (inQuotes) return null;
   fields.push(extractField(text, fieldStart, cursor));
-  return fields;
+  return endOfInput ? [fields, cursor] : null;
 }
 
 function extractField(text: string, start: number, end: number): string {
@@ -380,16 +330,31 @@ export async function writeCsv(
   destination: string,
   options: WriteOptions = {},
 ): Promise<void> {
-  const csv = format({ headers: options.headers ?? true, delimiter: options.delimiter ?? "," });
-  csv.pipe(createWriteStream(destination));
+  const delimiter = options.delimiter ?? ",";
+  if (delimiter.length !== 1) throw new Error("delimiter must be a single character");
 
-  for await (const row of toAsync(rows)) {
-    const ok = csv.write(row as never);
-    if (!ok) await new Promise<void>((resolve) => csv.once("drain", resolve));
+  const stream = createWriteStream(destination);
+  const iterator = toAsync(rows)[Symbol.asyncIterator]();
+  const first = await iterator.next();
+
+  if (first.done === true) {
+    stream.end();
+    await finished(stream);
+    return;
   }
 
-  csv.end();
-  await finished(csv);
+  const headerOption = options.headers ?? true;
+  const headers = Array.isArray(headerOption) ? headerOption : headerOption === true && !Array.isArray(first.value) ? Object.keys(first.value) : undefined;
+
+  if (headers !== undefined) await writeCsvLine(stream, headers, delimiter);
+  await writeCsvLine(stream, rowValues(first.value, headers), delimiter);
+
+  for await (const row of iteratorToAsync(iterator)) {
+    await writeCsvLine(stream, rowValues(row, headers), delimiter);
+  }
+
+  stream.end();
+  await finished(stream);
 }
 
 export function inferCsv(value: string): CellValue {
@@ -398,6 +363,31 @@ export function inferCsv(value: string): CellValue {
 
 async function* toAsync<T>(rows: AsyncIterable<T> | Iterable<T>): AsyncIterable<T> {
   yield* rows;
+}
+
+async function* iteratorToAsync<T>(iterator: AsyncIterator<T>): AsyncIterable<T> {
+  while (true) {
+    const next = await iterator.next();
+    if (next.done === true) return;
+    yield next.value;
+  }
+}
+
+async function writeCsvLine(stream: NodeJS.WritableStream, values: unknown[], delimiter: string): Promise<void> {
+  const line = `${values.map(csvEscape).join(delimiter)}\n`;
+  if (!stream.write(line)) await new Promise<void>((resolve) => stream.once("drain", resolve));
+}
+
+function rowValues(row: RowLike, headers: string[] | undefined): unknown[] {
+  if (headers !== undefined) {
+    return Array.isArray(row) ? headers.map((_, index) => row[index] ?? null) : headers.map((header) => row[header] ?? null);
+  }
+  return Array.isArray(row) ? row : Object.values(row);
+}
+
+function csvEscape(value: unknown): string {
+  const text = value instanceof Date ? value.toISOString() : String(value ?? "");
+  return /[",\r\n]/.test(text) ? `"${text.replace(/"/g, "\"\"")}"` : text;
 }
 
 function normalizeCsvValue(value: string): CellValue {

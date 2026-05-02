@@ -18,6 +18,7 @@
     "LICENSE"
   ],
   "scripts": {
+    "clean": "rm -rf dist",
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run",
@@ -30,7 +31,7 @@
     "benchmark:files": "tsx benchmark/files.ts",
     "benchmark:isolated": "tsx benchmark/isolated/index.ts",
     "benchmark:strong": "tsx benchmark/strong.ts",
-    "prepublishOnly": "npm run lint && npm run typecheck && npm test && npm run build"
+    "prepublishOnly": "npm run clean && npm run lint && npm run typecheck && npm test && npm run build"
   },
   "keywords": [
     "excel",
@@ -41,7 +42,7 @@
     "etl",
     "spreadsheet"
   ],
-  "author": "",
+  "author": "beingmartinbmc",
   "license": "MIT",
   "repository": {
     "type": "git",
@@ -59,16 +60,21 @@
     "access": "public"
   },
   "dependencies": {
-    "@fast-csv/format": "^5.0.5",
     "fflate": "^0.8.2"
+  },
+  "peerDependencies": {
+    "xlsx": "^0.18.5"
+  },
+  "peerDependenciesMeta": {
+    "xlsx": {
+      "optional": true
+    }
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
-    "@fast-csv/parse": "^5.0.5",
     "@types/node": "^25.6.0",
     "@vitest/coverage-v8": "^4.1.5",
     "eslint": "^10.2.1",
-    "exceljs": "^4.4.0",
     "prettier": "^3.8.3",
     "tsx": "^4.21.0",
     "typescript": "^6.0.3",

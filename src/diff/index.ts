@@ -1,4 +1,5 @@
 import { writeFile } from "node:fs/promises";
+import { rowIdentity } from "../key.js";
 import type { Row } from "../types.js";
 
 export interface DiffOptions {
@@ -64,9 +65,8 @@ export async function writeDiffReport(result: DiffResult, destination: string): 
 }
 
 function indexByKey(rows: Iterable<Row>, key: string | string[]): Map<string, Row> {
-  const keys = Array.isArray(key) ? key : [key];
   const index = new Map<string, Row>();
-  for (const row of rows) index.set(keys.map((name) => String(row[name] ?? "")).join("\u0000"), row);
+  for (const row of rows) index.set(rowIdentity(row, key), row);
   return index;
 }
 
@@ -77,7 +77,19 @@ function changedColumnsFor(before: Row, after: Row): string[] {
 
 function sameValue(left: unknown, right: unknown): boolean {
   if (left instanceof Date && right instanceof Date) return left.getTime() === right.getTime();
-  return JSON.stringify(left) === JSON.stringify(right);
+  if (Array.isArray(left) && Array.isArray(right)) {
+    return left.length === right.length && left.every((value, index) => sameValue(value, right[index]));
+  }
+  if (isPlainObject(left) && isPlainObject(right)) {
+    const leftKeys = Object.keys(left).sort();
+    const rightKeys = Object.keys(right).sort();
+    return sameValue(leftKeys, rightKeys) && leftKeys.every((key) => sameValue(left[key], right[key]));
+  }
+  return Object.is(left, right);
+}
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value) && !(value instanceof Date);
 }
 
 function keyPreview(row: Row): string {

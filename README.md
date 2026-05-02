@@ -167,7 +167,7 @@ error,missing_column,email is required,891,email,email,
               trim/dedupe     issue report      one pass
 ```
 
-Pipeline stages are lazy. CSV reads stay streaming end-to-end; XLSX reads target the selected worksheet without inflating a full workbook model. Adjacent transforms are fused into a single pass, and `.collect()` / `parseDetailed()` only materialize the rows you ask them to return.
+Pipeline stages are lazy. CSV reads stay streaming end-to-end; XLSX reads target the selected worksheet without inflating a full workbook model. Adjacent transforms are fused into a single pass. Use `.drain()` or `for await` for constant-memory consumption; `.collect()`, `.process()`, and `parseDetailed()` intentionally materialize returned rows and/or issues.
 
 ---
 
@@ -408,7 +408,7 @@ const userSchema = {
 | Format | Read | Write | Notes |
 | --- | :---: | :---: | --- |
 | `.csv` | Streaming | Streaming | Custom parser, zero-row-object count path, backpressure-aware writer |
-| `.xlsx` | Targeted | Full | Selective decompression, lazy shared strings |
+| `.xlsx` | Targeted | Full | Selective decompression, lazy shared strings; writes zip asynchronously but materialize workbook XML |
 | `.xls` | Full | — | Via optional `xlsx` package (`npm install xlsx`) |
 | `.json` | Full | Full | For fixtures, snapshots, and intermediate ETL |
 
@@ -424,7 +424,9 @@ const userSchema = {
 - Sheet selection by name or index.
 - Decompresses workbook metadata and the targeted sheet instead of building a full workbook model.
 - Lazy shared-string resolution.
+- Numeric cells with date styles are returned as `Date`.
 - Formula preservation: `{ formula, result }` cells.
+- XLSX writes currently build workbook XML in memory before zipping.
 
 ---
 
@@ -467,6 +469,8 @@ await writeDiffReport(changes, "changes.csv");
 const enriched = joinRows(orders, customers, "customerId");
 ```
 
+The query parser intentionally supports a compact subset: `SELECT`, one optional `WHERE` predicate, optional `ORDER BY`, and optional `LIMIT`.
+
 ---
 
 ## Formula Engine
@@ -482,7 +486,7 @@ const engine = new FormulaEngine({
 engine.evaluate("DISCOUNT(total, 0.15)", { total: 200 }); // 170
 ```
 
-Built-in: `SUM`, `AVERAGE`, `MIN`, `MAX`, `COUNT`, `IF`, `CONCAT`, plus arithmetic.
+Built-in: `SUM`, `AVERAGE`, `MIN`, `MAX`, `COUNT`, `IF`, `CONCAT`, plus arithmetic through a small parser without dynamic code execution.
 
 ---
 
@@ -510,16 +514,16 @@ plugins.use({
 import { read, workerMap } from "pravaah";
 
 const rows = await read("large.csv", { inferTypes: true }).collect();
-const enriched = await workerMap(rows, `(row) => ({ ...row, score: Number(row.revenue) * 0.12 })`, { concurrency: 4 });
+const enriched = await workerMap(rows, (row) => ({ ...row, score: Number(row.revenue) * 0.12 }), { concurrency: 4 });
 ```
 
-Runs CPU-heavy transforms in Node.js worker threads.
+Function mappers run with bounded local concurrency and support closures. For true worker-thread execution, pass a module URL or path and optionally `{ exportName }`; the exported mapper receives `(row, index)`.
 
 ---
 
 ## Benchmarks
 
-Every number below is from an isolated child process. RSS sampled every 25ms. Best of 3 runs. macOS Apple Silicon, Node.js 22.
+Every number below is from an isolated child process. RSS sampled every 25ms. Best of 3 runs. macOS Apple Silicon, Node.js 22. Reproduce with the benchmark scripts in `benchmark/`; benchmark fixture outputs are generated artifacts and are not committed.
 
 ### CSV Read
 

@@ -1,4 +1,6 @@
+import { readFile as readTextFile } from "node:fs/promises";
 import { collectCsvViaEvents, drainCsvViaEvents, readCsv, writeCsv } from "../csv/index.js";
+import { rowIdentity } from "../key.js";
 import { finishStats, createStats, observeMemory } from "../perf/index.js";
 import { cleanRow, type InferSchema, type SchemaDefinition, PravaahValidationError, validateRow } from "../schema/index.js";
 import type { ProcessResult, ProcessStats, ReadOptions, Row, RowLike, PravaahIssue, WriteOptions } from "../types.js";
@@ -22,6 +24,7 @@ export class PravaahPipeline<T = Row> implements AsyncIterable<T> {
   constructor(
     private readonly source: () => AsyncIterable<T>,
     private readonly fastPaths: PipelineFastPaths<T> = {},
+    private readonly validationIssues: PravaahIssue[] = [],
   ) {}
 
   [Symbol.asyncIterator](): AsyncIterator<T> {
@@ -59,14 +62,14 @@ export class PravaahPipeline<T = Row> implements AsyncIterable<T> {
   }
 
   map<U>(mapper: (row: T, index: number) => U | Promise<U>): PravaahPipeline<U> {
-    const next = new PravaahPipeline<U>(this.source as unknown as () => AsyncIterable<U>);
+    const next = new PravaahPipeline<U>(this.source as unknown as () => AsyncIterable<U>, {}, this.validationIssues);
     next.pendingOps.push(...this.pendingOps);
     next.pendingOps.push({ kind: "map", fn: mapper as unknown as (row: unknown, index: number) => unknown });
     return next;
   }
 
   filter(predicate: (row: T, index: number) => boolean | Promise<boolean>): PravaahPipeline<T> {
-    const next = new PravaahPipeline<T>(this.source);
+    const next = new PravaahPipeline<T>(this.source, {}, this.validationIssues);
     next.pendingOps.push(...this.pendingOps);
     next.pendingOps.push({ kind: "filter", fn: predicate as unknown as (row: unknown, index: number) => boolean | Promise<boolean> });
     return next;
@@ -94,6 +97,7 @@ export class PravaahPipeline<T = Row> implements AsyncIterable<T> {
     options: Pick<ReadOptions, "validation" | "cleaning"> = {},
   ): PravaahPipeline<InferSchema<S>> {
     const iterate = () => this.buildIterator();
+    const validationIssues: PravaahIssue[] = [];
     return new PravaahPipeline(async function* () {
       let rowNumber = 1;
       const seen = new Set<string>();
@@ -120,11 +124,11 @@ export class PravaahPipeline<T = Row> implements AsyncIterable<T> {
         } else if (options.validation === "fail-fast") {
           throw new PravaahValidationError(result.issues);
         } else if (options.validation !== "skip") {
-          for (const issue of result.issues) process.emitWarning(issue.message, { code: issue.code });
+          validationIssues.push(...result.issues);
         }
         rowNumber += 1;
       }
-    });
+    }, {}, validationIssues);
   }
 
   take(limit: number): PravaahPipeline<T> {
@@ -166,6 +170,11 @@ export class PravaahPipeline<T = Row> implements AsyncIterable<T> {
       }
     }
 
+    if (this.validationIssues.length > 0) {
+      issues.push(...this.validationIssues);
+      stats.errors += this.validationIssues.length;
+    }
+
     return { rows, issues, stats: finishStats(stats) };
   }
 
@@ -186,6 +195,8 @@ export class PravaahPipeline<T = Row> implements AsyncIterable<T> {
         throw error;
       }
     }
+
+    if (this.validationIssues.length > 0) stats.errors += this.validationIssues.length;
 
     return finishStats(stats);
   }
@@ -218,7 +229,7 @@ export function read(
     return new PravaahPipeline(async function* () {
       const text = Buffer.isBuffer(source)
         ? source.toString("utf8")
-        : await import("node:fs/promises").then((fs) => fs.readFile(source, "utf8"));
+        : await readTextFile(source, "utf8");
       const data = JSON.parse(text) as Row[];
       yield* data;
     });
@@ -329,8 +340,9 @@ function observeMemoryPeriodically(stats: ProcessStats): void {
 function inferFormat(path?: string): "xlsx" | "xls" | "csv" | "json" {
   if (path?.endsWith(".csv")) return "csv";
   if (path?.endsWith(".json")) return "json";
+  if (path?.endsWith(".xlsx")) return "xlsx";
   if (path?.endsWith(".xls")) return "xls";
-  return "xlsx";
+  throw new Error(`Unable to infer format${path === undefined ? "" : ` from path: ${path}`}`);
 }
 
 function isIterableSource(value: unknown): value is AsyncIterable<RowLike> | Iterable<RowLike> {
@@ -347,8 +359,7 @@ function isRow(value: unknown): value is Row {
 
 function isDuplicate(row: Row, dedupeKey: string | string[] | undefined, seen: Set<string>): boolean {
   if (dedupeKey === undefined) return false;
-  const keys = Array.isArray(dedupeKey) ? dedupeKey : [dedupeKey];
-  const identity = keys.map((key) => String(row[key] ?? "")).join("\u0000");
+  const identity = rowIdentity(row, dedupeKey);
   if (seen.has(identity)) return true;
   seen.add(identity);
   return false;
