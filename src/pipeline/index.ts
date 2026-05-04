@@ -165,10 +165,8 @@ export class PravaahPipeline<T = Row> implements AsyncIterable<T> {
     const lastSchemaPlan = [...next.plans].reverse().find((plan) => plan.kind === "schema") as
       | Extract<OpPlan, { kind: "schema" }>
       | undefined;
-    const validation = lastSchemaPlan?.options.validation;
-    const plan: Extract<OpPlan, { kind: "refine" }> = { kind: "refine", refiners };
-    if (validation !== undefined) plan.validation = validation;
-    next.plans.push(plan);
+    const validation = lastSchemaPlan?.options.validation ?? "fail-fast";
+    next.plans.push({ kind: "refine", refiners, validation });
     return next;
   }
 
