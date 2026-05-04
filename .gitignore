@@ -12,3 +12,4 @@ benchmark/results/*
 .env
 .env.*
 !.env.example
+CLAUDE.md

@@ -5,6 +5,20 @@
 [![CI](https://github.com/beingmartinbmc/pravaah/actions/workflows/ci.yml/badge.svg)](https://github.com/beingmartinbmc/pravaah/actions/workflows/ci.yml)
 [![license](https://img.shields.io/npm/l/pravaah.svg)](./LICENSE)
 
+## What's new in 0.2.0
+
+- **Streaming XLSX writer.** Rows are streamed into a DEFLATE zip entry as they arrive — no more materializing the whole workbook.
+- **Pipeline fusion.** `clean()`, `schema()`, `map()`, `filter()`, and `take()` all run in a single iteration pass.
+- **Expanded schema.** New `integer`, `enum`, `url`, `uuid`, `regex`, `literal`, `array` kinds, plus `min`/`max`/`length`/`minLength`/`maxLength`/`pattern` constraints, pre-coerce `transform`, and cross-field `refine()`.
+- **JSONL/NDJSON** streaming read + write. Auto-detected from `.jsonl` / `.ndjson`.
+- **gzip everywhere.** `.csv.gz` and `.jsonl.gz` round-trip natively via `node:zlib`.
+- **Query v2.** `AND`/`OR`/`NOT`, `IN (...)`, `LIKE`, and `COUNT`/`SUM`/`AVG`/`MIN`/`MAX` with `GROUP BY`.
+- **Formula engine v2.** Full expression parser: nested function calls, comparisons, string concat (`&`), and new functions (`ROUND`, `ABS`, `LEN`, `UPPER`, `LOWER`, `TRIM`, `AND`, `OR`, `NOT`, `ISBLANK`, `DATEDIF`, `TODAY`, `NOW`).
+- **Progress events.** `pipeline.onProgress(event => ...)` for UI/observability wiring.
+- **CLI.** `npx pravaah head | stats | validate | convert | diff | query`.
+
+---
+
 **Stop writing messy CSV import logic. Validate 7 million rows without blowing memory.**
 
 Pravaah is a schema-first, streaming data pipeline library for Excel, CSV, XLS, and JSON in Node.js.

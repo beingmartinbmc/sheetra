@@ -2,8 +2,17 @@ import { createReadStream, createWriteStream } from "node:fs";
 import { Readable } from "node:stream";
 import { finished } from "node:stream/promises";
 import { StringDecoder } from "node:string_decoder";
+import { createGunzip, createGzip } from "node:zlib";
 import { finishStats, createStats, observeMemory } from "../perf/index.js";
 import type { CellValue, ProcessStats, ReadOptions, Row, RowLike, WriteOptions } from "../types.js";
+
+function openSourceStream(source: string | Buffer): NodeJS.ReadableStream {
+  const base: NodeJS.ReadableStream = typeof source === "string" ? createReadStream(source) : Readable.from(source);
+  const isGzipPath = typeof source === "string" && source.toLowerCase().endsWith(".gz");
+  const isGzipBuffer = Buffer.isBuffer(source) && source.length >= 2 && source[0] === 0x1f && source[1] === 0x8b;
+  if (!isGzipPath && !isGzipBuffer) return base;
+  return base.pipe(createGunzip());
+}
 
 export async function* readCsv(source: string | Buffer, options: ReadOptions = {}): AsyncIterable<Row> {
   const headers = options.headers ?? true;
@@ -38,7 +47,7 @@ export function drainCsvViaEvents(source: string | Buffer, options: ReadOptions 
 function drainCsvByScanningRecords(source: string | Buffer, options: ReadOptions): Promise<ProcessStats> {
   return new Promise((resolve, reject) => {
     const stats = createStats();
-    const stream = typeof source === "string" ? createReadStream(source) : Readable.from(source);
+    const stream = openSourceStream(source);
     const scanner = createRecordScanner((options.headers ?? true) === true, (options.delimiter ?? ",").charCodeAt(0));
     let failed = false;
 
@@ -49,7 +58,7 @@ function drainCsvByScanningRecords(source: string | Buffer, options: ReadOptions
         observeMemory(stats);
       } catch (error) {
         failed = true;
-        stream.destroy(error instanceof Error ? error : new Error(String(error)));
+        (stream as Readable).destroy(error instanceof Error ? error : new Error(String(error)));
       }
     });
     stream.on("error", reject);
@@ -102,7 +111,7 @@ async function* nativeReadCsv(
   explicitHeaders?: string[] | null,
 ): AsyncIterable<Row> {
   const delimCode = delimiter.charCodeAt(0);
-  const stream = typeof source === "string" ? createReadStream(source) : Readable.from(source);
+  const stream = openSourceStream(source);
   const decoder = new StringDecoder("utf8");
 
   let headers: string[] | null = explicitHeaders ?? null;
@@ -333,28 +342,37 @@ export async function writeCsv(
   const delimiter = options.delimiter ?? ",";
   if (delimiter.length !== 1) throw new Error("delimiter must be a single character");
 
-  const stream = createWriteStream(destination);
+  const useGzip = options.gzip ?? destination.toLowerCase().endsWith(".gz");
+  const fileStream = createWriteStream(destination);
+  const writeTarget: NodeJS.WritableStream = useGzip
+    ? (() => {
+        const gzip = createGzip();
+        gzip.pipe(fileStream);
+        return gzip;
+      })()
+    : fileStream;
+
   const iterator = toAsync(rows)[Symbol.asyncIterator]();
   const first = await iterator.next();
 
   if (first.done === true) {
-    stream.end();
-    await finished(stream);
+    writeTarget.end();
+    await finished(fileStream);
     return;
   }
 
   const headerOption = options.headers ?? true;
   const headers = Array.isArray(headerOption) ? headerOption : headerOption === true && !Array.isArray(first.value) ? Object.keys(first.value) : undefined;
 
-  if (headers !== undefined) await writeCsvLine(stream, headers, delimiter);
-  await writeCsvLine(stream, rowValues(first.value, headers), delimiter);
+  if (headers !== undefined) await writeCsvLine(writeTarget, headers, delimiter);
+  await writeCsvLine(writeTarget, rowValues(first.value, headers), delimiter);
 
   for await (const row of iteratorToAsync(iterator)) {
-    await writeCsvLine(stream, rowValues(row, headers), delimiter);
+    await writeCsvLine(writeTarget, rowValues(row, headers), delimiter);
   }
 
-  stream.end();
-  await finished(stream);
+  writeTarget.end();
+  await finished(fileStream);
 }
 
 export function inferCsv(value: string): CellValue {
