@@ -1,15 +1,19 @@
 export { read, write, parse, parseDetailed, PravaahPipeline } from "./pipeline/index.js";
+export type { ProgressEvent } from "./pipeline/index.js";
 export { readCsv, writeCsv, inferCsv } from "./csv/index.js";
 export { readXls } from "./xls/index.js";
 export { readXlsx, writeXlsx, readWorkbook, writeWorkbook, workbook, worksheet, cell, formula } from "./xlsx/index.js";
+export { readJsonl, writeJsonl } from "./jsonl/index.js";
 export {
   schema,
   validateRow,
+  validateRowAsync,
   validateRows,
   cleanRow,
   cleanRows,
   normalizeHeader,
   writeIssueReport,
+  applyRefinements,
   PravaahValidationError,
 } from "./schema/index.js";
 export { FormulaEngine, evaluateFormula } from "./formula/index.js";

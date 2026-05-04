@@ -1,5 +1,7 @@
+import { createWriteStream } from "node:fs";
 import { readFile, writeFile } from "node:fs/promises";
-import { strFromU8, strToU8, unzipSync, zip } from "fflate";
+import { finished } from "node:stream/promises";
+import { strFromU8, strToU8, unzipSync, zip, Zip, ZipDeflate, ZipPassThrough } from "fflate";
 import type { CellValue, ReadOptions, Row, RowLike, WriteOptions } from "../types.js";
 
 const NEEDED_PATHS = new Set([
@@ -70,15 +72,103 @@ export async function writeXlsx(
   destination: string,
   options: WriteOptions = {},
 ): Promise<void> {
-  const normalizedRows: RowLike[] = [];
-  for await (const row of toAsync(rows)) normalizedRows.push(row);
+  const sheetName = options.sheetName ?? "Sheet1";
 
-  const headers = options.headers ?? inferHeaders(normalizedRows);
-  await writeWorkbook(
-    workbook([worksheet(options.sheetName ?? "Sheet1", normalizedRows.map((row) => rowToObject(row, headers)))]),
-    destination,
-    { ...options, headers },
-  );
+  // Buffer first row to infer headers if not provided
+  const iterator = toAsync(rows)[Symbol.asyncIterator]();
+  const first = await iterator.next();
+
+  if (first.done === true) {
+    await writeWorkbook(workbook([worksheet(sheetName, [])]), destination, options);
+    return;
+  }
+
+  const headers = options.headers ?? (Array.isArray(first.value) ? first.value.map((_, i) => `_${i + 1}`) : Object.keys(first.value as Row));
+  const streamedSheet: AsyncIterable<RowLike> = {
+    async *[Symbol.asyncIterator]() {
+      yield first.value;
+      while (true) {
+        const next = await iterator.next();
+        if (next.done === true) return;
+        yield next.value;
+      }
+    },
+  };
+
+  await writeXlsxStreaming(streamedSheet, destination, sheetName, headers);
+}
+
+async function writeXlsxStreaming(
+  rows: AsyncIterable<RowLike>,
+  destination: string,
+  sheetName: string,
+  headers: string[],
+): Promise<void> {
+  const fileStream = createWriteStream(destination);
+  let streamError: Error | undefined;
+  fileStream.on("error", (error) => {
+    streamError = error;
+  });
+
+  const archive = new Zip((err, chunk, final) => {
+    if (err !== null) {
+      streamError = err instanceof Error ? err : new Error(String(err));
+      fileStream.destroy(streamError);
+      return;
+    }
+    fileStream.write(Buffer.from(chunk));
+    if (final) fileStream.end();
+  });
+
+  const sheetDefinition = worksheet(sheetName, []);
+  const metadataParts: Array<[string, string]> = [
+    ["[Content_Types].xml", contentTypesXml([sheetDefinition])],
+    ["_rels/.rels", rootRelsXml()],
+    ["docProps/app.xml", appXml([sheetName])],
+    ["docProps/core.xml", coreXml({})],
+    ["xl/workbook.xml", workbookXml([sheetDefinition])],
+    ["xl/_rels/workbook.xml.rels", workbookRelsXml([sheetDefinition])],
+    ["xl/styles.xml", stylesXml()],
+  ];
+
+  for (const [name, contents] of metadataParts) {
+    addZipText(archive, name, contents);
+    if (streamError) throw streamError;
+  }
+
+  const sheetFile = new ZipDeflate("xl/worksheets/sheet1.xml", { level: 6 });
+  archive.add(sheetFile);
+
+  const prologue = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+  <sheetData>
+`;
+  sheetFile.push(strToU8(prologue), false);
+
+  const headerRow = rowXml(headers, 1);
+  sheetFile.push(strToU8(headerRow + "\n"), false);
+
+  let rowNumber = 2;
+  for await (const row of rows) {
+    if (streamError) throw streamError;
+    const values = Array.isArray(row) ? row : headers.map((header) => (row as Row)[header] ?? null);
+    sheetFile.push(strToU8(rowXml(values, rowNumber) + "\n"), false);
+    rowNumber += 1;
+  }
+
+  const epilogue = `  </sheetData>\n</worksheet>`;
+  sheetFile.push(strToU8(epilogue), true);
+
+  archive.end();
+
+  await finished(fileStream);
+  if (streamError) throw streamError;
+}
+
+function addZipText(archive: Zip, name: string, contents: string): void {
+  const file = new ZipPassThrough(name);
+  archive.add(file);
+  file.push(strToU8(contents), true);
 }
 
 export async function readWorkbook(source: string | Buffer, options: ReadOptions = {}): Promise<Workbook> {
