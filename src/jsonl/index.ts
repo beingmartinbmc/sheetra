@@ -1,14 +1,13 @@
 import { createReadStream, createWriteStream } from "node:fs";
-import { Readable, Transform } from "node:stream";
+import { Readable } from "node:stream";
 import { finished } from "node:stream/promises";
 import { StringDecoder } from "node:string_decoder";
 import { createGunzip, createGzip } from "node:zlib";
-import type { ReadOptions, Row, RowLike, WriteOptions } from "../types.js";
+import type { Row, RowLike, WriteOptions } from "../types.js";
 
-export async function* readJsonl(source: string | Buffer, options: ReadOptions = {}): AsyncIterable<Row> {
+export async function* readJsonl(source: string | Buffer): AsyncIterable<Row> {
   const base = typeof source === "string" ? createReadStream(source) : Readable.from(source);
-  const isGzip = shouldGunzip(source, options);
-  const stream = isGzip ? base.pipe(createGunzip()) : base;
+  const stream = shouldGunzip(source) ? base.pipe(createGunzip()) : base;
   const decoder = new StringDecoder("utf8");
   let buffer = "";
 
@@ -59,10 +58,9 @@ function parseLine(line: string): Row {
   return parsed as Row;
 }
 
-function shouldGunzip(source: string | Buffer, options: ReadOptions): boolean {
+function shouldGunzip(source: string | Buffer): boolean {
   if (typeof source === "string") return source.toLowerCase().endsWith(".gz");
   if (Buffer.isBuffer(source) && source.length >= 2 && source[0] === 0x1f && source[1] === 0x8b) return true;
-  void options;
   return false;
 }
 
@@ -73,6 +71,3 @@ function dateReplacer(_key: string, value: unknown): unknown {
 async function* toAsync<T>(rows: AsyncIterable<T> | Iterable<T>): AsyncIterable<T> {
   yield* rows;
 }
-
-// Exported for CSV gzip re-use
-export { createGunzip, createGzip, Transform };

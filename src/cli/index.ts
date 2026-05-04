@@ -70,9 +70,15 @@ async function commandValidate(parsed: CliArgs): Promise<number> {
   const source = parsed.args[0];
   const schemaPath = parsed.flags.schema;
   if (source === undefined || typeof schemaPath !== "string") {
-    return fail("pravaah validate <file> --schema <schema.(js|mjs|ts|json)> [--report <issues.csv>]");
+    return fail("pravaah validate <file> --schema <schema.json> [--allow-js-schema] [--report <issues.csv>]");
   }
-  const definition = await loadSchemaFromPath(schemaPath);
+  const allowJs = parsed.flags["allow-js-schema"] === true;
+  let definition: SchemaDefinition;
+  try {
+    definition = await loadSchemaFromPath(schemaPath, allowJs);
+  } catch (error) {
+    return fail((error as Error).message);
+  }
   const mode = typeof parsed.flags.mode === "string" ? parsed.flags.mode : "collect";
   const result = await parseDetailed(source, definition, { validation: mode as "collect" | "fail-fast" | "skip" });
 
@@ -145,12 +151,13 @@ function printHelp(): void {
       "  query    <file> --sql <query>       Run a Pravaah SQL query",
       "",
       "Flags:",
-      "  --rows N         Rows to print for `head`",
-      "  --schema PATH    Path to a JS/TS/JSON schema module (default export)",
-      "  --mode MODE      Validation mode: collect | fail-fast | skip",
-      "  --report PATH    Write an issue/diff report as CSV",
-      "  --key COLS       Comma-separated key columns for diff",
-      "  --sql QUERY      SQL for `query`",
+      "  --rows N                Rows to print for `head`",
+      "  --schema PATH           Path to a JSON schema file (or JS with --allow-js-schema)",
+      "  --allow-js-schema       Permit --schema to execute a .js/.mjs/.ts module (unsafe)",
+      "  --mode MODE             Validation mode: collect | fail-fast | skip",
+      "  --report PATH           Write an issue/diff report as CSV",
+      "  --key COLS              Comma-separated key columns for diff",
+      "  --sql QUERY             SQL for `query`",
       "",
     ].join("\n"),
   );
@@ -183,10 +190,15 @@ function parseArgs(argv: string[]): CliArgs {
   return { command, args: rest, flags };
 }
 
-async function loadSchemaFromPath(path: string): Promise<SchemaDefinition> {
+async function loadSchemaFromPath(path: string, allowJs: boolean): Promise<SchemaDefinition> {
   if (path.endsWith(".json")) {
     const json = JSON.parse(await readFile(path, "utf8"));
     return json as SchemaDefinition;
+  }
+  if (!allowJs) {
+    throw new Error(
+      `Refusing to import JavaScript schema at ${path}. Pass --allow-js-schema to execute arbitrary code from this file.`,
+    );
   }
   const module = await import(pathToFileURL(path).href);
   const candidate = module.default ?? module.schema ?? module;

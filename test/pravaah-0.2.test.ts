@@ -307,4 +307,160 @@ describe("CLI", () => {
 
     await rm(dir, { recursive: true, force: true });
   });
+
+  it("refuses to import JavaScript schema without --allow-js-schema", async () => {
+    const dir = await tmp();
+    const csv = join(dir, "data.csv");
+    const jsSchema = join(dir, "schema.mjs");
+    await writeFile(csv, "id,name\n1,Ada\n");
+    await writeFile(jsSchema, "export default { id: 'number', name: 'string' };\n");
+
+    const originalStdout = process.stdout.write.bind(process.stdout);
+    const originalStderr = process.stderr.write.bind(process.stderr);
+    const errors: string[] = [];
+    process.stdout.write = (() => true) as typeof process.stdout.write;
+    process.stderr.write = ((chunk: string) => {
+      errors.push(chunk);
+      return true;
+    }) as typeof process.stderr.write;
+
+    try {
+      expect(await runCli(["validate", csv, "--schema", jsSchema])).toBe(1);
+      expect(errors.join("")).toContain("--allow-js-schema");
+      expect(await runCli(["validate", csv, "--schema", jsSchema, "--allow-js-schema"])).toBe(0);
+    } finally {
+      process.stdout.write = originalStdout;
+      process.stderr.write = originalStderr;
+    }
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  it("returns exit code 2 for validation failures", async () => {
+    const dir = await tmp();
+    const csv = join(dir, "data.csv");
+    const schemaPath = join(dir, "schema.json");
+    await writeFile(csv, "id,name\nnot-a-number,Ada\n");
+    await writeFile(schemaPath, JSON.stringify({ id: "number", name: "string" }));
+
+    const originalStdout = process.stdout.write.bind(process.stdout);
+    process.stdout.write = (() => true) as typeof process.stdout.write;
+    try {
+      expect(await runCli(["validate", csv, "--schema", schemaPath])).toBe(2);
+    } finally {
+      process.stdout.write = originalStdout;
+    }
+    await rm(dir, { recursive: true, force: true });
+  });
+});
+
+describe("Query multi-column SELECT regressions", () => {
+  const rows = [
+    { team: "a", name: "Ada", score: 10 },
+    { team: "a", name: "Linus", score: 30 },
+    { team: "b", name: "Grace", score: 7 },
+  ];
+
+  it("projects two bare columns without eating one as alias", async () => {
+    await expect(query(rows, "SELECT team, name WHERE score > 5 ORDER BY name")).resolves.toEqual([
+      { team: "a", name: "Ada" },
+      { team: "b", name: "Grace" },
+      { team: "a", name: "Linus" },
+    ]);
+  });
+
+  it("projects three columns", async () => {
+    await expect(query(rows, "SELECT team, name, score WHERE team = 'a' ORDER BY score")).resolves.toEqual([
+      { team: "a", name: "Ada", score: 10 },
+      { team: "a", name: "Linus", score: 30 },
+    ]);
+  });
+});
+
+describe("Pipeline re-iteration and branching isolation", () => {
+  it("produces identical results when collected twice", async () => {
+    const pipeline = read([
+      { id: 1, name: "Ada" },
+      { id: 2, name: "Grace" },
+    ])
+      .schema({ id: schema.number(), name: schema.string() });
+
+    const first = await pipeline.collect();
+    const second = await pipeline.collect();
+    expect(first).toEqual(second);
+    expect(first).toHaveLength(2);
+  });
+
+  it("does not leak dedupe state between two runs", async () => {
+    const pipeline = read([
+      { id: 1 },
+      { id: 1 },
+      { id: 2 },
+    ]).clean({ dedupeKey: "id" });
+
+    const first = await pipeline.collect();
+    const second = await pipeline.collect();
+    expect(first).toHaveLength(2);
+    expect(second).toHaveLength(2);
+  });
+
+  it("tracks row numbers from 1 on every iteration", async () => {
+    const result = await read([{ id: "x" }, { id: "y" }])
+      .schema({ id: schema.number() }, { validation: "collect" })
+      .process();
+    expect(result.issues.map((issue) => issue.rowNumber)).toEqual([1, 2]);
+
+    const result2 = await read([{ id: "x" }, { id: "y" }])
+      .schema({ id: schema.number() }, { validation: "collect" })
+      .process();
+    expect(result2.issues.map((issue) => issue.rowNumber)).toEqual([1, 2]);
+  });
+
+  it("branches independently after .filter()", async () => {
+    const base = read([{ v: 1 }, { v: 2 }, { v: 3 }]);
+    const evens = base.filter((row) => Number(row.v) % 2 === 0);
+    const odds = base.filter((row) => Number(row.v) % 2 === 1);
+    expect(await evens.collect()).toEqual([{ v: 2 }]);
+    expect(await odds.collect()).toEqual([{ v: 1 }, { v: 3 }]);
+  });
+});
+
+describe("XLSX writer edge cases", () => {
+  it("rejects gzip option on XLSX writes", async () => {
+    const dir = await tmp();
+    const file = join(dir, "bad.xlsx");
+    await expect(write([{ id: 1 }], file, { gzip: true })).rejects.toThrow(/gzip/);
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  it("writes an empty sheet when no rows are given", async () => {
+    const dir = await tmp();
+    const file = join(dir, "empty.xlsx");
+    await write([], file, { format: "xlsx" });
+    const rows = await read(file, { format: "xlsx" }).collect();
+    expect(rows).toEqual([]);
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  it("preserves order and values for a larger streamed batch", async () => {
+    const dir = await tmp();
+    const file = join(dir, "large.xlsx");
+    const input = Array.from({ length: 500 }, (_, i) => ({ id: i, label: `row-${i}` }));
+    await write(input, file);
+    const rows = await read(file, { format: "xlsx" }).collect();
+    expect(rows).toHaveLength(500);
+    expect(rows[0]).toEqual({ id: 0, label: "row-0" });
+    expect(rows[499]).toEqual({ id: 499, label: "row-499" });
+    await rm(dir, { recursive: true, force: true });
+  });
+});
+
+describe("Formula parser comparisons inside IF", () => {
+  it("treats = inside IF() as equality, not assignment", () => {
+    expect(evaluateFormula("IF(a = 1, 'eq', 'ne')", { a: 1 })).toBe("eq");
+    expect(evaluateFormula("IF(a = 1, 'eq', 'ne')", { a: 2 })).toBe("ne");
+  });
+
+  it("handles nested comparisons", () => {
+    expect(evaluateFormula("IF(score >= 90, 'A', IF(score >= 80, 'B', 'C'))", { score: 85 })).toBe("B");
+  });
 });

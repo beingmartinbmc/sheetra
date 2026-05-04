@@ -58,11 +58,7 @@ function drainCsvByScanningRecords(source: string | Buffer, options: ReadOptions
         observeMemory(stats);
       } catch (error) {
         failed = true;
-        if (typeof (stream as NodeJS.ReadableStream & { destroy?: (err?: Error) => void }).destroy === "function") {
-          (stream as NodeJS.ReadableStream & { destroy: (err?: Error) => void }).destroy(error instanceof Error ? error : new Error(String(error)));
-        } else {
-          reject(error instanceof Error ? error : new Error(String(error)));
-        }
+        (stream as Readable).destroy(error instanceof Error ? error : new Error(String(error)));
       }
     });
     stream.on("error", reject);

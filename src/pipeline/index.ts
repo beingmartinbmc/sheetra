@@ -28,30 +28,59 @@ export interface ProgressEvent {
   peakRssBytes?: number;
 }
 
-type FusedOp =
+interface SchemaOpOptions {
+  validation?: ReadOptions["validation"];
+  cleaning?: ReadOptions["cleaning"];
+  refine?: RowRefine<Row> | RowRefine<Row>[];
+}
+
+type OpPlan =
+  | { kind: "map"; fn: (row: unknown, index: number) => unknown | Promise<unknown> }
+  | { kind: "filter"; fn: (row: unknown, index: number) => boolean | Promise<boolean> }
+  | { kind: "clean"; options: NonNullable<ReadOptions["cleaning"]> }
+  | { kind: "schema"; definition: SchemaDefinition; options: SchemaOpOptions }
+  | { kind: "refine"; refiners: RowRefine<Row>[]; validation?: ReadOptions["validation"] }
+  | { kind: "take"; limit: number };
+
+type OpRuntime =
   | { kind: "map"; fn: (row: unknown, index: number) => unknown | Promise<unknown> }
   | { kind: "filter"; fn: (row: unknown, index: number) => boolean | Promise<boolean> }
   | { kind: "clean"; options: NonNullable<ReadOptions["cleaning"]>; seen: Set<string> }
   | {
       kind: "schema";
       definition: SchemaDefinition;
-      options: { validation?: ReadOptions["validation"]; cleaning?: ReadOptions["cleaning"]; refine?: RowRefine<Row> | RowRefine<Row>[] };
-      state: { rowNumber: number; seen: Set<string> };
-      issueSink: PravaahIssue[];
+      options: SchemaOpOptions;
+      rowNumber: number;
+      seen: Set<string>;
     }
-  | { kind: "take"; limit: number; state: { count: number } };
+  | { kind: "refine"; refiners: RowRefine<Row>[]; validation?: ReadOptions["validation"]; rowNumber: number }
+  | { kind: "take"; limit: number; count: number };
 
 const SKIP = Symbol("pravaah.skip");
 const STOP = Symbol("pravaah.stop");
 
+function instantiate(plan: OpPlan): OpRuntime {
+  if (plan.kind === "map") return { kind: "map", fn: plan.fn };
+  if (plan.kind === "filter") return { kind: "filter", fn: plan.fn };
+  if (plan.kind === "clean") return { kind: "clean", options: plan.options, seen: new Set() };
+  if (plan.kind === "schema") {
+    return { kind: "schema", definition: plan.definition, options: plan.options, rowNumber: 1, seen: new Set() };
+  }
+  if (plan.kind === "refine") {
+    const runtime: OpRuntime & { kind: "refine" } = { kind: "refine", refiners: plan.refiners, rowNumber: 1 };
+    if (plan.validation !== undefined) runtime.validation = plan.validation;
+    return runtime;
+  }
+  return { kind: "take", limit: plan.limit, count: 0 };
+}
+
 export class PravaahPipeline<T = Row> implements AsyncIterable<T> {
-  private readonly pendingOps: FusedOp[] = [];
+  private readonly plans: OpPlan[] = [];
   private readonly progressHandlers: ((event: ProgressEvent) => void)[] = [];
 
   constructor(
     private readonly source: () => AsyncIterable<unknown>,
     private readonly fastPaths: PipelineFastPaths<T> = {},
-    private readonly validationIssues: PravaahIssue[] = [],
   ) {}
 
   [Symbol.asyncIterator](): AsyncIterator<T> {
@@ -71,17 +100,18 @@ export class PravaahPipeline<T = Row> implements AsyncIterable<T> {
     for (const handler of this.progressHandlers) handler(event);
   }
 
-  private buildIterator(): AsyncIterable<T> {
-    if (this.pendingOps.length === 0) return this.source() as AsyncIterable<T>;
+  private buildIterator(issueSink?: PravaahIssue[]): AsyncIterable<T> {
+    if (this.plans.length === 0) return this.source() as AsyncIterable<T>;
 
-    const ops = [...this.pendingOps];
+    const runtime = this.plans.map(instantiate);
+    const sink = issueSink ?? [];
     const src = this.source;
 
     return {
       async *[Symbol.asyncIterator]() {
         let index = 0;
         for await (const raw of src()) {
-          const result = await runOps(raw, index, ops);
+          const result = await runOps(raw, index, runtime, sink);
           index += 1;
           if (result === SKIP) continue;
           if (result === STOP) return;
@@ -92,27 +122,27 @@ export class PravaahPipeline<T = Row> implements AsyncIterable<T> {
   }
 
   private clone<U>(fastPaths: PipelineFastPaths<U> = {}): PravaahPipeline<U> {
-    const next = new PravaahPipeline<U>(this.source, fastPaths, this.validationIssues);
-    next.pendingOps.push(...this.pendingOps);
+    const next = new PravaahPipeline<U>(this.source, fastPaths);
+    next.plans.push(...this.plans);
     next.progressHandlers.push(...this.progressHandlers);
     return next;
   }
 
   map<U>(mapper: (row: T, index: number) => U | Promise<U>): PravaahPipeline<U> {
     const next = this.clone<U>();
-    next.pendingOps.push({ kind: "map", fn: mapper as unknown as (row: unknown, index: number) => unknown | Promise<unknown> });
+    next.plans.push({ kind: "map", fn: mapper as unknown as (row: unknown, index: number) => unknown | Promise<unknown> });
     return next;
   }
 
   filter(predicate: (row: T, index: number) => boolean | Promise<boolean>): PravaahPipeline<T> {
     const next = this.clone<T>();
-    next.pendingOps.push({ kind: "filter", fn: predicate as unknown as (row: unknown, index: number) => boolean | Promise<boolean> });
+    next.plans.push({ kind: "filter", fn: predicate as unknown as (row: unknown, index: number) => boolean | Promise<boolean> });
     return next;
   }
 
   clean(options: NonNullable<ReadOptions["cleaning"]>): PravaahPipeline<T> {
     const next = this.clone<T>();
-    next.pendingOps.push({ kind: "clean", options, seen: new Set<string>() });
+    next.plans.push({ kind: "clean", options });
     return next;
   }
 
@@ -121,49 +151,37 @@ export class PravaahPipeline<T = Row> implements AsyncIterable<T> {
     options: Pick<ReadOptions, "validation" | "cleaning"> & { refine?: RowRefine<InferSchema<S>> | RowRefine<InferSchema<S>>[] } = {},
   ): PravaahPipeline<InferSchema<S>> {
     const next = this.clone<InferSchema<S>>();
-    next.pendingOps.push({
+    next.plans.push({
       kind: "schema",
       definition,
-      options: options as unknown as {
-        validation?: ReadOptions["validation"];
-        cleaning?: ReadOptions["cleaning"];
-        refine?: RowRefine<Row> | RowRefine<Row>[];
-      },
-      state: { rowNumber: 1, seen: new Set<string>() },
-      issueSink: next.validationIssues,
+      options: options as SchemaOpOptions,
     });
     return next;
   }
 
   refine(refiner: RowRefine<T> | RowRefine<T>[]): PravaahPipeline<T> {
-    const lastSchema = [...this.pendingOps].reverse().find((op) => op.kind === "schema") as
-      | Extract<FusedOp, { kind: "schema" }>
+    const next = this.clone<T>();
+    const refiners = (Array.isArray(refiner) ? refiner : [refiner]) as RowRefine<Row>[];
+    const lastSchemaPlan = [...next.plans].reverse().find((plan) => plan.kind === "schema") as
+      | Extract<OpPlan, { kind: "schema" }>
       | undefined;
-    if (lastSchema !== undefined) {
-      const existing = lastSchema.options.refine;
-      const refiners = Array.isArray(refiner) ? refiner : [refiner];
-      const existingList = existing === undefined ? [] : Array.isArray(existing) ? existing : [existing];
-      lastSchema.options.refine = [...existingList, ...(refiners as RowRefine<Row>[])];
-      return this.clone<T>();
-    }
-    return this.map<T>(async (row, index) => {
-      const context = { rowNumber: index + 1 };
-      const issues = applyRefinements(row, row as unknown as Row, context, refiner as RowRefine<T>);
-      if (issues.length > 0) throw new PravaahValidationError(issues);
-      return row;
-    });
+    const validation = lastSchemaPlan?.options.validation;
+    const plan: Extract<OpPlan, { kind: "refine" }> = { kind: "refine", refiners };
+    if (validation !== undefined) plan.validation = validation;
+    next.plans.push(plan);
+    return next;
   }
 
   take(limit: number): PravaahPipeline<T> {
     const next = this.clone<T>();
-    next.pendingOps.push({ kind: "take", limit, state: { count: 0 } });
+    next.plans.push({ kind: "take", limit });
     return next;
   }
 
   async collect(): Promise<T[]> {
-    if (this.pendingOps.length === 0 && this.fastPaths.collect !== undefined) return this.fastPaths.collect();
+    if (this.plans.length === 0 && this.fastPaths.collect !== undefined) return this.fastPaths.collect();
     const rows: T[] = [];
-    for await (const row of this) rows.push(row);
+    for await (const row of this.buildIterator()) rows.push(row);
     return rows;
   }
 
@@ -173,7 +191,7 @@ export class PravaahPipeline<T = Row> implements AsyncIterable<T> {
     const issues: PravaahIssue[] = [];
 
     try {
-      for await (const row of this) {
+      for await (const row of this.buildIterator(issues)) {
         rows.push(row);
         stats.rowsProcessed += 1;
         observeMemoryPeriodically(stats);
@@ -182,28 +200,24 @@ export class PravaahPipeline<T = Row> implements AsyncIterable<T> {
     } catch (error) {
       if (error instanceof PravaahValidationError) {
         issues.push(...error.issues);
-        stats.errors += error.issues.length;
       } else {
         throw error;
       }
     }
 
-    if (this.validationIssues.length > 0) {
-      issues.push(...this.validationIssues);
-      stats.errors += this.validationIssues.length;
-    }
-
+    stats.errors = issues.length;
     const final = finishStats(stats);
     this.emitProgress(final);
     return { rows, issues, stats: final };
   }
 
   async drain(): Promise<ProcessStats> {
-    if (this.pendingOps.length === 0 && this.fastPaths.drain !== undefined) return this.fastPaths.drain();
+    if (this.plans.length === 0 && this.fastPaths.drain !== undefined) return this.fastPaths.drain();
     const stats = createStats();
+    const issues: PravaahIssue[] = [];
 
     try {
-      for await (const row of this) {
+      for await (const row of this.buildIterator(issues)) {
         void row;
         stats.rowsProcessed += 1;
         observeMemoryPeriodically(stats);
@@ -211,25 +225,29 @@ export class PravaahPipeline<T = Row> implements AsyncIterable<T> {
       }
     } catch (error) {
       if (error instanceof PravaahValidationError) {
-        stats.errors += error.issues.length;
+        issues.push(...error.issues);
       } else {
         throw error;
       }
     }
 
-    if (this.validationIssues.length > 0) stats.errors += this.validationIssues.length;
-
+    stats.errors = issues.length;
     const final = finishStats(stats);
     this.emitProgress(final);
     return final;
   }
 
   async write(destination: string, options: WriteOptions = {}): Promise<ProcessStats> {
-    return write(this as AsyncIterable<RowLike>, destination, options);
+    return write(this.buildIterator() as AsyncIterable<RowLike>, destination, options);
   }
 }
 
-async function runOps(value: unknown, index: number, ops: FusedOp[]): Promise<unknown | typeof SKIP | typeof STOP> {
+async function runOps(
+  value: unknown,
+  index: number,
+  ops: OpRuntime[],
+  issueSink: PravaahIssue[],
+): Promise<unknown | typeof SKIP | typeof STOP> {
   let current: unknown = value;
   for (const op of ops) {
     if (op.kind === "map") {
@@ -243,39 +261,50 @@ async function runOps(value: unknown, index: number, ops: FusedOp[]): Promise<un
       if (isDuplicate(current as Row, op.options.dedupeKey, op.seen)) return SKIP;
     } else if (op.kind === "schema") {
       if (!isRow(current)) {
-        const issue: PravaahIssue = {
-          code: "array_row",
-          message: "Schema validation expects object rows with named columns",
-          rowNumber: op.state.rowNumber,
-          severity: "error",
-        };
-        throw new PravaahValidationError([issue]);
+        throw new PravaahValidationError([
+          {
+            code: "array_row",
+            message: "Schema validation expects object rows with named columns",
+            rowNumber: op.rowNumber,
+            severity: "error",
+          },
+        ]);
       }
       const cleaned = cleanRow(current, op.options.cleaning);
-      if (isDuplicate(cleaned, op.options.cleaning?.dedupeKey, op.state.seen)) {
-        op.state.rowNumber += 1;
+      if (isDuplicate(cleaned, op.options.cleaning?.dedupeKey, op.seen)) {
+        op.rowNumber += 1;
         return SKIP;
       }
-      const context = { rowNumber: op.state.rowNumber };
-      op.state.rowNumber += 1;
+      const context = { rowNumber: op.rowNumber };
+      op.rowNumber += 1;
       const result = validateRow(cleaned, op.definition, context);
       if (result.value === undefined) {
         if (op.options.validation === "fail-fast") throw new PravaahValidationError(result.issues);
-        if (op.options.validation !== "skip") op.issueSink.push(...result.issues);
+        if (op.options.validation !== "skip") issueSink.push(...result.issues);
         return SKIP;
       }
       if (op.options.refine !== undefined) {
         const refineIssues = applyRefinements(result.value as unknown as Row, cleaned, context, op.options.refine);
         if (refineIssues.length > 0) {
           if (op.options.validation === "fail-fast") throw new PravaahValidationError(refineIssues);
-          if (op.options.validation !== "skip") op.issueSink.push(...refineIssues);
+          if (op.options.validation !== "skip") issueSink.push(...refineIssues);
           return SKIP;
         }
       }
       current = result.value;
+    } else if (op.kind === "refine") {
+      const context = { rowNumber: op.rowNumber };
+      op.rowNumber += 1;
+      const rowForContext: Row = isRow(current) ? current : {};
+      const issues = applyRefinements<unknown>(current, rowForContext, context, op.refiners as RowRefine<unknown>[]);
+      if (issues.length > 0) {
+        if (op.validation === "fail-fast") throw new PravaahValidationError(issues);
+        if (op.validation !== "skip") issueSink.push(...issues);
+        return SKIP;
+      }
     } else if (op.kind === "take") {
-      if (op.state.count >= op.limit) return STOP;
-      op.state.count += 1;
+      if (op.count >= op.limit) return STOP;
+      op.count += 1;
     }
   }
   return current;
@@ -300,7 +329,7 @@ export function read(
   }
   if (format === "xlsx") return new PravaahPipeline(() => readXlsx(source, options));
   if (format === "xls") return new PravaahPipeline(() => readXls(source, options));
-  if (format === "jsonl") return new PravaahPipeline(() => readJsonl(source, options));
+  if (format === "jsonl") return new PravaahPipeline(() => readJsonl(source));
   if (format === "json") {
     return new PravaahPipeline(async function* () {
       const text = Buffer.isBuffer(source)
@@ -353,8 +382,8 @@ export async function parseDetailed<S extends SchemaDefinition>(
   if (options.cleaning !== undefined) schemaOptions.cleaning = options.cleaning;
   const pipeline = read(source, options).schema(definition, schemaOptions);
   if (options.validation === "fail-fast") {
-    const stats = createStats();
     const rows: InferSchema<S>[] = [];
+    const stats = createStats();
     for await (const row of pipeline) {
       rows.push(row);
       stats.rowsProcessed += 1;

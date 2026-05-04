@@ -72,9 +72,9 @@ export async function writeXlsx(
   destination: string,
   options: WriteOptions = {},
 ): Promise<void> {
-  const sheetName = options.sheetName ?? "Sheet1";
+  if (options.gzip === true) throw new Error("XLSX files are already compressed; gzip option is not supported");
 
-  // Buffer first row to infer headers if not provided
+  const sheetName = options.sheetName ?? "Sheet1";
   const iterator = toAsync(rows)[Symbol.asyncIterator]();
   const first = await iterator.next();
 
@@ -83,7 +83,9 @@ export async function writeXlsx(
     return;
   }
 
-  const headers = options.headers ?? (Array.isArray(first.value) ? first.value.map((_, i) => `_${i + 1}`) : Object.keys(first.value as Row));
+  const explicit = options.headers;
+  const firstIsArray = Array.isArray(first.value);
+  const headers = explicit ?? (firstIsArray ? (first.value as unknown[]).map((_, i) => `_${i + 1}`) : Object.keys(first.value as Row));
   const streamedSheet: AsyncIterable<RowLike> = {
     async *[Symbol.asyncIterator]() {
       yield first.value;
@@ -106,63 +108,110 @@ async function writeXlsxStreaming(
 ): Promise<void> {
   const fileStream = createWriteStream(destination);
   let streamError: Error | undefined;
-  fileStream.on("error", (error) => {
-    streamError = error;
-  });
+  const setError = (error: unknown): void => {
+    const normalized = error instanceof Error ? error : new Error(String(error));
+    if (streamError === undefined) streamError = normalized;
+    if (!fileStream.destroyed) fileStream.destroy(normalized);
+  };
+
+  fileStream.on("error", setError);
+
+  let pendingDrain: Promise<void> | undefined;
+  const writeChunk = (chunk: Uint8Array): void => {
+    if (streamError !== undefined) return;
+    const buf = Buffer.from(chunk);
+    const canContinue = fileStream.write(buf);
+    if (!canContinue && pendingDrain === undefined) {
+      pendingDrain = new Promise<void>((resolve) => {
+        fileStream.once("drain", () => {
+          pendingDrain = undefined;
+          resolve();
+        });
+      });
+    }
+  };
+  const waitForDrain = async (): Promise<void> => {
+    if (pendingDrain !== undefined) await pendingDrain;
+  };
 
   const archive = new Zip((err, chunk, final) => {
-    if (err !== null) {
-      streamError = err instanceof Error ? err : new Error(String(err));
-      fileStream.destroy(streamError);
+    if (err !== null && err !== undefined) {
+      setError(err);
       return;
     }
-    fileStream.write(Buffer.from(chunk));
+    writeChunk(chunk);
     if (final) fileStream.end();
   });
 
-  const sheetDefinition = worksheet(sheetName, []);
-  const metadataParts: Array<[string, string]> = [
-    ["[Content_Types].xml", contentTypesXml([sheetDefinition])],
-    ["_rels/.rels", rootRelsXml()],
-    ["docProps/app.xml", appXml([sheetName])],
-    ["docProps/core.xml", coreXml({})],
-    ["xl/workbook.xml", workbookXml([sheetDefinition])],
-    ["xl/_rels/workbook.xml.rels", workbookRelsXml([sheetDefinition])],
-    ["xl/styles.xml", stylesXml()],
-  ];
+  try {
+    const sheetDefinition = worksheet(sheetName, []);
+    const metadataParts: Array<[string, string]> = [
+      ["[Content_Types].xml", contentTypesXml([sheetDefinition])],
+      ["_rels/.rels", rootRelsXml()],
+      ["docProps/app.xml", appXml([sheetName])],
+      ["docProps/core.xml", coreXml({})],
+      ["xl/workbook.xml", workbookXml([sheetDefinition])],
+      ["xl/_rels/workbook.xml.rels", workbookRelsXml([sheetDefinition])],
+      ["xl/styles.xml", stylesXml()],
+    ];
 
-  for (const [name, contents] of metadataParts) {
-    addZipText(archive, name, contents);
-    if (streamError) throw streamError;
-  }
+    for (const [name, contents] of metadataParts) {
+      addZipText(archive, name, contents);
+      if (streamError !== undefined) throw streamError;
+      await waitForDrain();
+    }
 
-  const sheetFile = new ZipDeflate("xl/worksheets/sheet1.xml", { level: 6 });
-  archive.add(sheetFile);
+    const sheetFile = new ZipDeflate("xl/worksheets/sheet1.xml", { level: 6 });
+    archive.add(sheetFile);
 
-  const prologue = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+    sheetFile.push(
+      strToU8(
+        `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
   <sheetData>
-`;
-  sheetFile.push(strToU8(prologue), false);
+`,
+      ),
+      false,
+    );
+    sheetFile.push(strToU8(rowXml(headers, 1) + "\n"), false);
+    await waitForDrain();
 
-  const headerRow = rowXml(headers, 1);
-  sheetFile.push(strToU8(headerRow + "\n"), false);
+    let rowNumber = 2;
+    for await (const row of rows) {
+      if (streamError !== undefined) throw streamError;
+      const values = rowValuesForSheet(row, headers);
+      sheetFile.push(strToU8(rowXml(values, rowNumber) + "\n"), false);
+      rowNumber += 1;
+      await waitForDrain();
+    }
 
-  let rowNumber = 2;
-  for await (const row of rows) {
-    if (streamError) throw streamError;
-    const values = Array.isArray(row) ? row : headers.map((header) => (row as Row)[header] ?? null);
-    sheetFile.push(strToU8(rowXml(values, rowNumber) + "\n"), false);
-    rowNumber += 1;
+    sheetFile.push(strToU8(`  </sheetData>\n</worksheet>`), true);
+    archive.end();
+  } catch (error) {
+    setError(error);
+    try {
+      archive.terminate();
+    } catch {
+      // archive already finalized or terminated
+    }
   }
 
-  const epilogue = `  </sheetData>\n</worksheet>`;
-  sheetFile.push(strToU8(epilogue), true);
+  try {
+    await finished(fileStream);
+  } catch (error) {
+    if (streamError === undefined) streamError = error instanceof Error ? error : new Error(String(error));
+  }
+  if (streamError !== undefined) throw streamError;
+}
 
-  archive.end();
-
-  await finished(fileStream);
-  if (streamError) throw streamError;
+function rowValuesForSheet(row: RowLike, headers: string[]): unknown[] {
+  if (Array.isArray(row)) {
+    if (row.length !== headers.length) {
+      return headers.map((_, index) => (row[index] === undefined ? null : row[index]));
+    }
+    return row;
+  }
+  return headers.map((header) => (row as Row)[header] ?? null);
 }
 
 function addZipText(archive: Zip, name: string, contents: string): void {

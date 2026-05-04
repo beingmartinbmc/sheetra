@@ -297,14 +297,6 @@ class QueryParser {
 
   private parseAlias(): string | undefined {
     if (this.consumeOptionalKeyword("as")) return this.consumeIdent();
-    const next = this.peek();
-    if (next?.kind === "ident") {
-      const lookahead = this.tokens[this.cursor + 1];
-      if (lookahead === undefined || (lookahead.kind !== "op" && !(lookahead.kind === "punct" && lookahead.value !== ","))) {
-        this.cursor += 1;
-        return next.value;
-      }
-    }
     return undefined;
   }
 
