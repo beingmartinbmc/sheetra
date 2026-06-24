@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { afterAll, describe, expect, it } from "vitest";
 import { query, workerMap, write } from "../src/index.js";
 import { queryStream } from "../src/query/index.js";
+import { FormulaEngine, PluginRegistry } from "../src/index.js";
 
 const tmpDirs: string[] = [];
 
@@ -188,3 +189,43 @@ describe("Worker pool - module-backed mappers reuse workers", () => {
   });
 });
 
+
+describe("Plugins - wired into FormulaEngine and validation", () => {
+  it("exposes plugin formulas to a FormulaEngine via plugins option", () => {
+    const registry = new PluginRegistry();
+    registry.use({
+      name: "tax",
+      formulas: {
+        WITHTAX: (args) => Number(args[0]) * 1.2,
+      },
+    });
+    const engine = new FormulaEngine({ plugins: registry });
+    expect(engine.evaluate("WITHTAX(100)")).toBeCloseTo(120);
+  });
+
+  it("merges plugin formulas with built-ins and explicit functions", () => {
+    const registry = new PluginRegistry();
+    registry.use({ name: "p", formulas: { TRIPLE: (args) => Number(args[0]) * 3 } });
+    const engine = new FormulaEngine({
+      plugins: registry,
+      functions: { QUAD: (args) => Number(args[0]) * 4 },
+    });
+    expect(engine.evaluate("SUM(TRIPLE(2), QUAD(2))")).toBe(14);
+  });
+
+  it("runs plugin validators across rows via the registry", () => {
+    const registry = new PluginRegistry();
+    registry.use({
+      name: "positive",
+      validators: [
+        (row) =>
+          typeof row.amount === "number" && row.amount < 0
+            ? [{ code: "negative", message: "amount must be positive", severity: "error" as const }]
+            : [],
+      ],
+    });
+    const issues = registry.validateRows([{ amount: 5 }, { amount: -1 }]);
+    expect(issues).toHaveLength(1);
+    expect(issues[0]?.code).toBe("negative");
+  });
+});
