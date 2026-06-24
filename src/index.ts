@@ -22,6 +22,8 @@ export { diff, writeDiffReport } from "./diff/index.js";
 export { plugins, PluginRegistry } from "./plugins/index.js";
 export { workerMap } from "./workers/index.js";
 export { createStats, finishStats, formatBytes, mergeStats, observeMemory } from "./perf/index.js";
+export { parseUpload } from "./adapters/index.js";
+export type { UploadMeta } from "./adapters/index.js";
 export type * from "./types.js";
 export type * from "./schema/index.js";
 export type * from "./xlsx/index.js";

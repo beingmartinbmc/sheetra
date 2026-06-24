@@ -257,3 +257,48 @@ describe("Pipeline - async field validation", () => {
     expect(result.issues.map((i) => i.message)).toContain("email already registered");
   });
 });
+
+describe("Adapters - stream uploads into parseDetailed", () => {
+  it("parses an uploaded CSV stream against a schema", async () => {
+    const { Readable } = await import("node:stream");
+    const { parseUpload } = await import("../src/adapters/index.js");
+    const { schema } = await import("../src/index.js");
+
+    const csv = "name,age\nAlice,30\nBob,oops\n";
+    const stream = Readable.from([Buffer.from(csv)]);
+    const result = await parseUpload(
+      stream,
+      { filename: "people.csv" },
+      { name: schema.string(), age: schema.integer() },
+      { validation: "collect" },
+    );
+
+    expect(result.rows).toEqual([{ name: "Alice", age: 30 }]);
+    expect(result.issues.some((i) => i.column === "age")).toBe(true);
+    expect(result.stats.rowsProcessed).toBeGreaterThan(0);
+  });
+
+  it("infers format from filename extension and supports jsonl", async () => {
+    const { Readable } = await import("node:stream");
+    const { parseUpload } = await import("../src/adapters/index.js");
+    const { schema } = await import("../src/index.js");
+
+    const jsonl = '{"id":1}\n{"id":2}\n';
+    const stream = Readable.from([Buffer.from(jsonl)]);
+    const result = await parseUpload(
+      stream,
+      { filename: "data.jsonl" },
+      { id: schema.integer() },
+    );
+    expect(result.rows).toEqual([{ id: 1 }, { id: 2 }]);
+  });
+
+  it("throws a clear error for unsupported upload extensions", async () => {
+    const { Readable } = await import("node:stream");
+    const { parseUpload } = await import("../src/adapters/index.js");
+    const stream = Readable.from([Buffer.from("x")]);
+    await expect(
+      parseUpload(stream, { filename: "notes.txt" }, { id: "string" }),
+    ).rejects.toThrow(/unsupported|format/i);
+  });
+});
