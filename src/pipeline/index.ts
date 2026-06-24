@@ -9,7 +9,7 @@ import {
   type RowRefine,
   type SchemaDefinition,
   PravaahValidationError,
-  validateRow,
+  validateRowAsync,
 } from "../schema/index.js";
 import type { ProcessResult, ProcessStats, ReadOptions, Row, RowLike, PravaahIssue, WriteOptions } from "../types.js";
 import { readXls } from "../xls/index.js";
@@ -275,7 +275,7 @@ async function runOps(
       }
       const context = { rowNumber: op.rowNumber };
       op.rowNumber += 1;
-      const result = validateRow(cleaned, op.definition, context);
+      const result = await validateRowAsync(cleaned, op.definition, context);
       if (result.value === undefined) {
         if (op.options.validation === "fail-fast") throw new PravaahValidationError(result.issues);
         if (op.options.validation !== "skip") issueSink.push(...result.issues);
