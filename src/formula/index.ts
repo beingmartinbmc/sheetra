@@ -1,10 +1,12 @@
 import type { CellValue, Row } from "../types.js";
+import type { PluginRegistry } from "../plugins/index.js";
 
 export type FormulaFunction = (args: CellValue[], row?: Row) => CellValue;
 
 export interface FormulaEngineOptions {
   functions?: Record<string, FormulaFunction>;
   preserveUnknown?: boolean;
+  plugins?: PluginRegistry;
 }
 
 export class FormulaEngine {
@@ -12,6 +14,7 @@ export class FormulaEngine {
 
   constructor(options: FormulaEngineOptions = {}) {
     for (const [name, fn] of Object.entries(defaultFunctions)) this.register(name, fn);
+    for (const [name, fn] of Object.entries(options.plugins?.formulas() ?? {})) this.register(name, fn);
     for (const [name, fn] of Object.entries(options.functions ?? {})) this.register(name, fn);
   }
 
