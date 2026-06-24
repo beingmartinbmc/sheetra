@@ -1,8 +1,8 @@
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { afterAll, describe, expect, it } from "vitest";
-import { query, write } from "../src/index.js";
+import { query, workerMap, write } from "../src/index.js";
 import { queryStream } from "../src/query/index.js";
 
 const tmpDirs: string[] = [];
@@ -146,3 +146,45 @@ describe("JSON write streams element-by-element", () => {
     expect(JSON.parse(await readFile(dest, "utf8"))).toEqual([]);
   });
 });
+
+describe("Worker pool - module-backed mappers reuse workers", () => {
+  it("processes all rows correctly through a persistent pool", async () => {
+    const dir = await tmp();
+    const mapperFile = join(dir, "double.mjs");
+    await writeFile(mapperFile, "export default (row, index) => ({ out: row.n * 2, index });\n");
+
+    const input = Array.from({ length: 20 }, (_, i) => ({ n: i }));
+    const result = await workerMap(input, new URL(`file://${mapperFile}`), { concurrency: 4 });
+
+    expect(result).toHaveLength(20);
+    expect(result.map((r) => (r as { out: number }).out)).toEqual(input.map((row) => row.n * 2));
+    expect(result.map((r) => (r as { index: number }).index)).toEqual(input.map((_, i) => i));
+  });
+
+  it("does not spawn more workers than the configured concurrency", async () => {
+    const dir = await tmp();
+    const mapperFile = join(dir, "track.mjs");
+    // Each worker records its own pid via a module-level counter that only
+    // increments once per worker process. With a pool of size 2 over 10 rows
+    // we expect at most 2 distinct worker ids.
+    await writeFile(
+      mapperFile,
+      "let id;\nexport default (row) => { id ??= Math.random(); return { id }; };\n",
+    );
+
+    const input = Array.from({ length: 10 }, (_, i) => ({ n: i }));
+    const result = await workerMap(input, new URL(`file://${mapperFile}`), { concurrency: 2 });
+    const distinct = new Set(result.map((r) => (r as { id: number }).id));
+    expect(distinct.size).toBeLessThanOrEqual(2);
+  });
+
+  it("propagates errors thrown inside a pooled worker", async () => {
+    const dir = await tmp();
+    const mapperFile = join(dir, "boom.mjs");
+    await writeFile(mapperFile, "export default () => { throw new Error('pool boom'); };\n");
+    await expect(
+      workerMap([{ n: 1 }], new URL(`file://${mapperFile}`), { concurrency: 2 }),
+    ).rejects.toThrow("pool boom");
+  });
+});
+
