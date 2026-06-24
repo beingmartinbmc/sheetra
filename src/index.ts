@@ -17,7 +17,7 @@ export {
   PravaahValidationError,
 } from "./schema/index.js";
 export { FormulaEngine, evaluateFormula } from "./formula/index.js";
-export { query, createIndex, joinRows } from "./query/index.js";
+export { query, queryStream, createIndex, joinRows } from "./query/index.js";
 export { diff, writeDiffReport } from "./diff/index.js";
 export { plugins, PluginRegistry } from "./plugins/index.js";
 export { workerMap } from "./workers/index.js";
