@@ -7,6 +7,14 @@
 
 ![Pravaah streaming spreadsheet pipeline hero](./assets/pravaah-readme-hero.png)
 
+## What's new in 0.3.0
+
+- **Streaming XLSX reader.** `readXlsx` now inflates the target worksheet incrementally via fflate's streaming `Unzip`, tokenizing rows at `</row>` boundaries. Memory drops from O(uncompressed sheet) to O(compressed file + shared strings + one row), and early `break` stops decompression.
+- **Query v3.** New `JOIN`, `HAVING`, and multi-column `ORDER BY`, plus a streaming `queryStream` and streaming JSON write.
+- **Plugin formulas.** `FormulaEngine` now resolves functions registered through `PluginRegistry`.
+- **Async field validators.** `read().schema()` now awaits async `validate` functions correctly.
+- **Upload adapter.** New `parseUpload` streams file uploads straight into `parseDetailed` without buffering the whole upload.
+
 ## What's new in 0.2.0
 
 - **Streaming XLSX writer.** Rows are streamed into a DEFLATE zip entry as they arrive — no more materializing the whole workbook.
