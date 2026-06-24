@@ -130,11 +130,25 @@ async function commandQuery(parsed: CliArgs): Promise<number> {
   const source = parsed.args[0];
   const sql = typeof parsed.flags.sql === "string" ? parsed.flags.sql : parsed.args[1];
   if (source === undefined || sql === undefined) {
-    return fail('pravaah query <file> --sql "select col from file where col = 1"');
+    return fail('pravaah query <file> --sql "select col from file where col = 1" [--join table=path]');
   }
-  const rows = await query(source, sql);
+  const join = parseJoinFlags(parsed.flags.join);
+  const rows = await query(source, sql, join === undefined ? {} : { join });
   process.stdout.write(JSON.stringify(rows, null, 2) + "\n");
   return 0;
+}
+
+function parseJoinFlags(flag: string | boolean | undefined): Record<string, string> | undefined {
+  if (typeof flag !== "string") return undefined;
+  const entries: Record<string, string> = {};
+  for (const pair of flag.split(",")) {
+    const eq = pair.indexOf("=");
+    if (eq === -1) continue;
+    const table = pair.slice(0, eq).trim();
+    const path = pair.slice(eq + 1).trim();
+    if (table.length > 0 && path.length > 0) entries[table] = path;
+  }
+  return Object.keys(entries).length > 0 ? entries : undefined;
 }
 
 function printHelp(): void {
@@ -158,6 +172,7 @@ function printHelp(): void {
       "  --report PATH           Write an issue/diff report as CSV",
       "  --key COLS              Comma-separated key columns for diff",
       "  --sql QUERY             SQL for `query`",
+      "  --join TABLE=PATH       Join source(s) for `query` (comma-separated)",
       "",
     ].join("\n"),
   );

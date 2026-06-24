@@ -6,6 +6,13 @@ export interface QueryOptions {
   source?: string | Buffer | AsyncIterable<Row> | Iterable<Row>;
 }
 
+export type JoinSource = string | Buffer | AsyncIterable<Row> | Iterable<Row>;
+
+export interface QueryExecutionOptions {
+  /** Named join sources keyed by the table name used after JOIN. */
+  join?: Record<string, JoinSource>;
+}
+
 type ComparisonOperator = "=" | "!=" | ">" | ">=" | "<" | "<=" | "contains" | "like" | "in";
 
 interface Comparison {
@@ -50,32 +57,107 @@ interface OrderByClause {
   direction: "asc" | "desc";
 }
 
+interface JoinClause {
+  table: string;
+  on: string;
+}
+
 interface QueryPlan {
   fields: SelectField[];
+  join?: JoinClause;
   where?: WhereNode;
   groupBy: string[];
-  orderBy?: OrderByClause;
+  having?: WhereNode;
+  orderBy: OrderByClause[];
   limit?: number;
 }
 
-export async function query(source: QueryOptions["source"], sql: string): Promise<Row[]> {
+export async function query(
+  source: QueryOptions["source"],
+  sql: string,
+  options: QueryExecutionOptions = {},
+): Promise<Row[]> {
   if (source === undefined) throw new Error("query() requires a source");
   const plan = parseQuery(sql);
   const rows: Row[] = [];
 
+  const joiner = plan.join !== undefined ? await buildJoiner(plan.join, options) : undefined;
+
   for await (const row of read(source)) {
-    if (plan.where === undefined || evaluateWhere(row as Row, plan.where)) {
-      rows.push(row as Row);
+    const base = row as Row;
+    if (joiner === undefined) {
+      if (plan.where === undefined || evaluateWhere(base, plan.where)) rows.push(base);
+      continue;
+    }
+    for (const merged of joiner(base)) {
+      if (plan.where === undefined || evaluateWhere(merged, plan.where)) rows.push(merged);
     }
   }
 
+  return finalizeRows(rows, plan);
+}
+
+/**
+ * Streaming query for the WHERE + projection + LIMIT case. Sorting, grouping,
+ * aggregates, and joins require buffering and fall back to {@link query}.
+ */
+export async function* queryStream(source: QueryOptions["source"], sql: string): AsyncIterable<Row> {
+  if (source === undefined) throw new Error("queryStream() requires a source");
+  const plan = parseQuery(sql);
+  const needsBuffering =
+    plan.join !== undefined ||
+    plan.groupBy.length > 0 ||
+    plan.having !== undefined ||
+    plan.orderBy.length > 0 ||
+    plan.fields.some((field) => field.kind !== "column");
+
+  if (needsBuffering) {
+    const rows = await query(source, sql);
+    yield* rows;
+    return;
+  }
+
+  let emitted = 0;
+  for await (const row of read(source)) {
+    const base = row as Row;
+    if (plan.where !== undefined && !evaluateWhere(base, plan.where)) continue;
+    yield project(base, plan.fields);
+    emitted += 1;
+    if (plan.limit !== undefined && emitted >= plan.limit) return;
+  }
+}
+
+function finalizeRows(rows: Row[], plan: QueryPlan): Row[] {
   let output = plan.groupBy.length > 0 || plan.fields.some((f) => f.kind !== "column")
     ? aggregate(rows, plan)
     : rows.map((row) => project(row, plan.fields));
 
-  if (plan.orderBy !== undefined) output = sortRows(output, plan.orderBy);
+  if (plan.having !== undefined) output = output.filter((row) => evaluateWhere(row, plan.having!));
+  if (plan.orderBy.length > 0) output = sortRows(output, plan.orderBy);
   if (plan.limit !== undefined) output = output.slice(0, plan.limit);
   return output;
+}
+
+async function buildJoiner(
+  join: JoinClause,
+  options: QueryExecutionOptions,
+): Promise<(left: Row) => Row[]> {
+  const provided = options.join ?? {};
+  const rawSource = provided[join.table];
+  if (rawSource === undefined) {
+    throw new Error(`Missing join source for table "${join.table}"; pass it via options.join`);
+  }
+
+  const rightRows: Row[] = [];
+  for await (const row of read(rawSource)) rightRows.push(row as Row);
+  const index = createIndex(rightRows, join.on);
+
+  return (left: Row): Row[] => {
+    const id = rowIdentity(left, [join.on]);
+    const matches = index.get(id);
+    if (matches === undefined) return [];
+    return matches.map((right) => ({ ...left, ...right }));
+  };
 }
 
 export function createIndex(rows: Iterable<Row>, key: string | string[]): Map<string, Row[]> {
@@ -124,8 +206,11 @@ type Token =
 const KEYWORDS = new Set([
   "select",
   "from",
+  "join",
+  "on",
   "where",
   "group",
+  "having",
   "by",
   "order",
   "limit",
@@ -227,21 +312,22 @@ class QueryParser {
     const fields = this.parseSelectList();
     this.consumeOptionalKeyword("from");
     if (this.peek()?.kind === "ident" || this.peek()?.kind === "string") this.cursor += 1;
-    const plan: QueryPlan = { fields, groupBy: [] };
+    const plan: QueryPlan = { fields, groupBy: [], orderBy: [] };
+    if (this.consumeOptionalKeyword("join")) {
+      const table = this.consumeIdent();
+      this.expectKeyword("on");
+      const on = this.consumeIdent();
+      plan.join = { table, on };
+    }
     if (this.consumeOptionalKeyword("where")) plan.where = this.parseOrExpression();
     if (this.consumeOptionalKeyword("group")) {
       this.expectKeyword("by");
       plan.groupBy = this.parseIdentifierList();
     }
+    if (this.consumeOptionalKeyword("having")) plan.having = this.parseOrExpression();
     if (this.consumeOptionalKeyword("order")) {
       this.expectKeyword("by");
-      const column = this.consumeIdent();
-      const direction = this.consumeOptionalKeyword("asc")
-        ? "asc"
-        : this.consumeOptionalKeyword("desc")
-          ? "desc"
-          : "asc";
-      plan.orderBy = { column, direction };
+      plan.orderBy = this.parseOrderByList();
     }
     if (this.consumeOptionalKeyword("limit")) {
       const token = this.consume();
@@ -249,6 +335,21 @@ class QueryParser {
       plan.limit = token.value;
     }
     return plan;
+  }
+
+  private parseOrderByList(): OrderByClause[] {
+    const clauses: OrderByClause[] = [];
+    while (true) {
+      const column = this.consumeIdent();
+      const direction = this.consumeOptionalKeyword("asc")
+        ? "asc"
+        : this.consumeOptionalKeyword("desc")
+          ? "desc"
+          : "asc";
+      clauses.push({ column, direction });
+      if (!this.consumeOptionalPunct(",")) break;
+    }
+    return clauses;
   }
 
   private parseSelectList(): SelectField[] {
@@ -524,8 +625,14 @@ function computeAggregate(aggregate: Aggregate, rows: Row[]): number | null {
   return Math.max(...values);
 }
 
-function sortRows(rows: Row[], orderBy: OrderByClause): Row[] {
-  return [...rows].sort((left, right) => compareRows(left, right, orderBy));
+function sortRows(rows: Row[], orderBy: OrderByClause[]): Row[] {
+  return [...rows].sort((left, right) => {
+    for (const clause of orderBy) {
+      const result = compareRows(left, right, clause);
+      if (result !== 0) return result;
+    }
+    return 0;
+  });
 }
 
 function compareRows(left: Row, right: Row, orderBy: OrderByClause): number {
