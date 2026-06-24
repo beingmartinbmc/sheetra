@@ -229,3 +229,31 @@ describe("Plugins - wired into FormulaEngine and validation", () => {
     expect(issues[0]?.code).toBe("negative");
   });
 });
+
+describe("Pipeline - async field validation", () => {
+  it("runs async validate() functions inside read().schema()", async () => {
+    const { read, schema } = await import("../src/index.js");
+    const src = [
+      { email: "ok@example.com" },
+      { email: "taken@example.com" },
+    ];
+    const taken = new Set(["taken@example.com"]);
+    const result = await read(src)
+      .schema(
+        {
+          email: schema.email({
+            validate: async (value: string) => {
+              await Promise.resolve();
+              return taken.has(value) ? "email already registered" : undefined;
+            },
+          }),
+        },
+        { validation: "collect" },
+      )
+      .process();
+
+    expect(result.rows).toHaveLength(1);
+    expect(result.rows[0]?.email).toBe("ok@example.com");
+    expect(result.issues.map((i) => i.message)).toContain("email already registered");
+  });
+});
