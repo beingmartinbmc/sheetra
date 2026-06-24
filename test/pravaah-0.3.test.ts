@@ -302,3 +302,108 @@ describe("Adapters - stream uploads into parseDetailed", () => {
     ).rejects.toThrow(/unsupported|format/i);
   });
 });
+
+describe("XLSX streaming read", () => {
+  it("reads rows correctly from a large generated workbook", async () => {
+    const { writeXlsx, readXlsx } = await import("../src/xlsx/index.js");
+    const dir = await tmp();
+    const file = join(dir, "big.xlsx");
+
+    const rowCount = 5000;
+    const rows = Array.from({ length: rowCount }, (_, i) => ({
+      id: i + 1,
+      name: `name-${i + 1}`,
+      note: `shared string value ${i % 7}`,
+    }));
+    await writeXlsx(rows, file);
+
+    const out: Array<Record<string, unknown>> = [];
+    for await (const row of readXlsx(file)) out.push(row);
+
+    expect(out).toHaveLength(rowCount);
+    expect(out[0]).toEqual({ id: 1, name: "name-1", note: "shared string value 0" });
+    expect(out[rowCount - 1]).toEqual({ id: rowCount, name: `name-${rowCount}`, note: "shared string value 1" });
+  });
+
+  it("supports early break without inflating the whole sheet", async () => {
+    const { writeXlsx, readXlsx } = await import("../src/xlsx/index.js");
+    const dir = await tmp();
+    const file = join(dir, "early.xlsx");
+
+    const rows = Array.from({ length: 20000 }, (_, i) => ({ id: i + 1, label: `row-${i + 1}` }));
+    await writeXlsx(rows, file);
+
+    const collected: Array<Record<string, unknown>> = [];
+    for await (const row of readXlsx(file)) {
+      collected.push(row);
+      if (collected.length === 3) break;
+    }
+
+    expect(collected).toEqual([
+      { id: 1, label: "row-1" },
+      { id: 2, label: "row-2" },
+      { id: 3, label: "row-3" },
+    ]);
+  });
+
+  it("streams from a Buffer source too", async () => {
+    const { writeXlsx, readXlsx } = await import("../src/xlsx/index.js");
+    const dir = await tmp();
+    const file = join(dir, "buf.xlsx");
+    await writeXlsx([{ a: 1, b: "x" }, { a: 2, b: "y" }], file);
+    const buf = await readFile(file);
+
+    const out: Array<Record<string, unknown>> = [];
+    for await (const row of readXlsx(buf)) out.push(row);
+    expect(out).toEqual([{ a: 1, b: "x" }, { a: 2, b: "y" }]);
+  });
+});
+
+describe("XLSX streaming read - edge cases", () => {
+  it("returns no rows for an empty sheet", async () => {
+    const { writeXlsx, readXlsx } = await import("../src/xlsx/index.js");
+    const dir = await tmp();
+    const file = join(dir, "empty-stream.xlsx");
+    await writeXlsx([], file);
+    const out: Array<Record<string, unknown>> = [];
+    for await (const row of readXlsx(file)) out.push(row);
+    expect(out).toEqual([]);
+  });
+
+  it("honours headers:false (positional keys) while streaming", async () => {
+    const { writeXlsx, readXlsx } = await import("../src/xlsx/index.js");
+    const dir = await tmp();
+    const file = join(dir, "headerless-stream.xlsx");
+    await writeXlsx([{ a: 1, b: 2 }, { a: 3, b: 4 }], file);
+    const out: Array<Record<string, unknown>> = [];
+    for await (const row of readXlsx(file, { headers: false })) out.push(row);
+    expect(out).toEqual([
+      { _1: "a", _2: "b" },
+      { _1: 1, _2: 2 },
+      { _1: 3, _2: 4 },
+    ]);
+  });
+
+  it("honours an explicit headers array while streaming", async () => {
+    const { writeXlsx, readXlsx } = await import("../src/xlsx/index.js");
+    const dir = await tmp();
+    const file = join(dir, "explicit-stream.xlsx");
+    await writeXlsx([{ a: 1, b: 2 }], file);
+    const out: Array<Record<string, unknown>> = [];
+    for await (const row of readXlsx(file, { headers: ["x", "y"] })) out.push(row);
+    expect(out).toEqual([
+      { x: "a", y: "b" },
+      { x: 1, y: 2 },
+    ]);
+  });
+
+  it("throws for a missing named sheet", async () => {
+    const { writeXlsx, readXlsx } = await import("../src/xlsx/index.js");
+    const dir = await tmp();
+    const file = join(dir, "named.xlsx");
+    await writeXlsx([{ a: 1 }], file);
+    await expect(async () => {
+      for await (const _row of readXlsx(file, { sheet: "Nope" })) void _row;
+    }).rejects.toThrow(/Worksheet not found/);
+  });
+});
