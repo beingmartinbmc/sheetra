@@ -9,7 +9,7 @@ import {
   type RowRefine,
   type SchemaDefinition,
   PravaahValidationError,
-  validateRow,
+  validateRowAsync,
 } from "../schema/index.js";
 import type { ProcessResult, ProcessStats, ReadOptions, Row, RowLike, PravaahIssue, WriteOptions } from "../types.js";
 import { readXls } from "../xls/index.js";
@@ -275,7 +275,7 @@ async function runOps(
       }
       const context = { rowNumber: op.rowNumber };
       op.rowNumber += 1;
-      const result = validateRow(cleaned, op.definition, context);
+      const result = await validateRowAsync(cleaned, op.definition, context);
       if (result.value === undefined) {
         if (op.options.validation === "fail-fast") throw new PravaahValidationError(result.issues);
         if (op.options.validation !== "skip") issueSink.push(...result.issues);
@@ -393,10 +393,34 @@ export async function parseDetailed<S extends SchemaDefinition>(
 }
 
 async function writeJson(rows: AsyncIterable<RowLike>, destination: string): Promise<void> {
-  const { writeFile } = await import("node:fs/promises");
-  const data: RowLike[] = [];
-  for await (const row of rows) data.push(row);
-  await writeFile(destination, `${JSON.stringify(data, null, 2)}\n`);
+  const { createWriteStream } = await import("node:fs");
+  const { finished } = await import("node:stream/promises");
+  const stream = createWriteStream(destination);
+  const writeChunk = async (chunk: string): Promise<void> => {
+    if (!stream.write(chunk)) await new Promise<void>((resolve) => stream.once("drain", resolve));
+  };
+
+  await writeChunk("[");
+  let index = 0;
+  for await (const row of rows) {
+    await writeChunk(index === 0 ? "\n" : ",\n");
+    await writeChunk(indentJson(JSON.stringify(row, jsonDateReplacer, 2)));
+    index += 1;
+  }
+  await writeChunk(index === 0 ? "]\n" : "\n]\n");
+  stream.end();
+  await finished(stream);
+}
+
+function indentJson(json: string): string {
+  return json
+    .split("\n")
+    .map((line) => `  ${line}`)
+    .join("\n");
+}
+
+function jsonDateReplacer(_key: string, value: unknown): unknown {
+  return value instanceof Date ? value.toISOString() : value;
 }
 
 async function* countRows<T extends RowLike>(rows: AsyncIterable<T> | Iterable<T>, stats: ProcessStats): AsyncIterable<T> {

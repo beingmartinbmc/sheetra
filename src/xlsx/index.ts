@@ -1,7 +1,7 @@
 import { createWriteStream } from "node:fs";
 import { readFile, writeFile } from "node:fs/promises";
 import { finished } from "node:stream/promises";
-import { strFromU8, strToU8, unzipSync, zip, Zip, ZipDeflate, ZipPassThrough } from "fflate";
+import { strFromU8, strToU8, Unzip, UnzipInflate, UnzipPassThrough, unzipSync, zip, Zip, ZipDeflate, ZipPassThrough } from "fflate";
 import type { CellValue, ReadOptions, Row, RowLike, WriteOptions } from "../types.js";
 
 const NEEDED_PATHS = new Set([
@@ -58,14 +58,179 @@ export async function* readXlsx(source: string | Buffer, options: ReadOptions = 
 
   if (target === undefined) throw new Error(`Worksheet not found: ${String(options.sheet ?? 0)}`);
 
-  const files = hasWorkbookMeta ? selectiveUnzip(raw, new Set([target.path])) : initialFiles;
-  const sheetData = files[target.path];
-  if (sheetData === undefined) throw new Error(`Worksheet XML not found: ${target.path}`);
-
-  const ssFile = files["xl/sharedStrings.xml"];
+  const ssFile = initialFiles["xl/sharedStrings.xml"];
   const sharedStrings = ssFile !== undefined ? new LazySharedStrings(ssFile) : new LazySharedStrings(undefined);
-  yield* iterateWorksheetRows(sheetData, sharedStrings, options, parseWorkbookStyles(files));
+  const styles = parseWorkbookStyles(initialFiles);
+
+  if (hasWorkbookMeta) {
+    // Streaming path: the worksheet XML is inflated incrementally and tokenized
+    // row-by-row, so the full inflated sheet is never held in memory. The only
+    // buffered data is the compressed `raw` bytes plus the shared-string table
+    // (lazily indexed); worksheet rows are produced as `</row>` boundaries arrive.
+    yield* streamWorksheetRows(inflateEntryText(raw, target.path), sharedStrings, options, styles);
+    return;
+  }
+
+  // Fallback for archives without standard workbook metadata: everything is
+  // already inflated, so reuse the synchronous buffer scanner.
+  const sheetData = initialFiles[target.path];
+  if (sheetData === undefined) throw new Error(`Worksheet XML not found: ${target.path}`);
+  yield* iterateWorksheetRows(sheetData, sharedStrings, options, styles);
 }
+
+/**
+ * Incrementally inflate a single zip entry, yielding decoded UTF-8 text chunks.
+ * Uses fflate's streaming `Unzip` so the target entry is decompressed in pieces
+ * rather than materializing the whole inflated buffer. Entries other than the
+ * target are never `start()`-ed, so they are skipped without inflation.
+ */
+async function* inflateEntryText(raw: Uint8Array, targetPath: string): AsyncIterable<string> {
+  const uz = new Unzip();
+  uz.register(UnzipInflate);
+  uz.register(UnzipPassThrough);
+
+  const decoder = new TextDecoder();
+  const target = normalizePath(targetPath);
+  let queue: string[] = [];
+  let failure: Error | undefined;
+  let finished = false;
+
+  uz.onfile = (file): void => {
+    if (normalizePath(file.name) !== target) return;
+    file.ondata = (err, chunk, final): void => {
+      if (err !== null && err !== undefined) {
+        failure = err instanceof Error ? err : new Error(String(err));
+        return;
+      }
+      if (chunk.length > 0) queue.push(decoder.decode(chunk, { stream: !final }));
+      if (final) finished = true;
+    };
+    file.start();
+  };
+
+  const CHUNK = 1 << 16;
+  const total = raw.length;
+  let off = 0;
+  do {
+    const end = Math.min(off + CHUNK, total);
+    const last = end >= total;
+    uz.push(raw.subarray(off, end), last);
+    if (failure !== undefined) throw failure;
+    if (queue.length > 0) {
+      const out = queue;
+      queue = [];
+      yield* out;
+    }
+    if (finished) return;
+    off = end;
+  } while (off < total);
+
+  if (failure !== undefined) throw failure;
+  if (queue.length > 0) yield* queue;
+}
+
+async function* streamWorksheetRows(
+  chunks: AsyncIterable<string>,
+  sharedStrings: LazySharedStrings,
+  options: ReadOptions,
+  styles: WorkbookStyles,
+): AsyncIterable<Row> {
+  const useArrayHeaders = Array.isArray(options.headers) && options.headers.length > 0;
+  const headerless = options.headers === false;
+  let headers = useArrayHeaders ? (options.headers as string[]) : undefined;
+
+  for await (const values of streamWorksheetValueRows(chunks, sharedStrings, options, styles)) {
+    if (headers === undefined && !headerless) {
+      headers = new Array(values.length);
+      for (let index = 0; index < values.length; index += 1) headers[index] = String(values[index] ?? `_${index + 1}`);
+      continue;
+    }
+
+    const obj: Row = {};
+    if (headerless) {
+      for (let index = 0; index < values.length; index += 1) {
+        if (values[index] !== undefined) obj[`_${index + 1}`] = values[index] ?? null;
+      }
+    } else {
+      const resolvedHeaders = headers ?? [];
+      for (let index = 0; index < resolvedHeaders.length; index += 1) {
+        obj[resolvedHeaders[index]!] = values[index] ?? null;
+      }
+    }
+    yield obj;
+  }
+}
+
+async function* streamWorksheetValueRows(
+  chunks: AsyncIterable<string>,
+  sharedStrings: LazySharedStrings,
+  options: ReadOptions,
+  styles: WorkbookStyles,
+): AsyncIterable<CellValue[]> {
+  let buf = "";
+  let inSheetData = false;
+  let colCount: number | undefined;
+  let dimensionResolved = false;
+
+  for await (const piece of chunks) {
+    buf += piece;
+
+    if (!inSheetData) {
+      if (!dimensionResolved) {
+        const dimIdx = buf.indexOf("<dimension");
+        if (dimIdx !== -1) {
+          const dimEnd = buf.indexOf(">", dimIdx);
+          if (dimEnd !== -1) {
+            colCount = parseDimensionColumnCountFromTag(buf.slice(dimIdx, dimEnd + 1));
+            dimensionResolved = true;
+          }
+        }
+      }
+
+      const sdStart = buf.indexOf("<sheetData");
+      if (sdStart === -1) continue;
+      const sdOpenEnd = buf.indexOf(">", sdStart);
+      if (sdOpenEnd === -1) continue;
+      if (buf[sdOpenEnd - 1] === "/") return; // <sheetData/> — empty sheet
+      inSheetData = true;
+      buf = buf.slice(sdOpenEnd + 1);
+    }
+
+    while (true) {
+      const closeIdx = buf.indexOf("</sheetData>");
+      const rowStart = buf.indexOf("<row");
+      if (rowStart === -1 || (closeIdx !== -1 && closeIdx < rowStart)) {
+        if (closeIdx !== -1) return;
+        break;
+      }
+
+      const rowOpenEnd = buf.indexOf(">", rowStart);
+      if (rowOpenEnd === -1) break; // incomplete open tag, wait for more
+
+      if (buf[rowOpenEnd - 1] === "/") {
+        buf = buf.slice(rowOpenEnd + 1);
+        yield [];
+        continue;
+      }
+
+      const rowEnd = buf.indexOf("</row>", rowOpenEnd);
+      if (rowEnd === -1) break; // incomplete row, wait for more
+
+      const rowXml = buf.slice(rowOpenEnd + 1, rowEnd);
+      buf = buf.slice(rowEnd + 6);
+      yield readWorksheetValueRow(rowXml, sharedStrings, options, colCount, styles);
+    }
+  }
+}
+
+function parseDimensionColumnCountFromTag(tag: string): number | undefined {
+  const ref = readXmlAttribute(tag, "ref");
+  if (ref === undefined) return undefined;
+  const parts = ref.split(":");
+  if (parts.length !== 2) return undefined;
+  return cellRefToColumnIndex(parts[1]!) + 1;
+}
+
 
 export async function writeXlsx(
   rows: AsyncIterable<RowLike> | Iterable<RowLike>,
