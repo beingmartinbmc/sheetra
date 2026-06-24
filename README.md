@@ -5,6 +5,8 @@
 [![CI](https://github.com/beingmartinbmc/pravaah/actions/workflows/ci.yml/badge.svg)](https://github.com/beingmartinbmc/pravaah/actions/workflows/ci.yml)
 [![license](https://img.shields.io/npm/l/pravaah.svg)](./LICENSE)
 
+![Pravaah streaming spreadsheet pipeline hero](./assets/pravaah-readme-hero.png)
+
 ## What's new in 0.2.0
 
 - **Streaming XLSX writer.** Rows are streamed into a DEFLATE zip entry as they arrive — no more materializing the whole workbook.
